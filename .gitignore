@@ -1,0 +1,17 @@
+# Build output
+build/
+DerivedData/
+
+# Xcode per-user state
+xcuserdata/
+*.xcuserstate
+
+# Backups of real session data (player names): keep local only
+ipad-backup-*/
+sessions.json
+
+.DS_Store
+
+# Local club finance and attendance graphics
+/October-*-expense-breakdown.*
+/October-*-player-list.*
