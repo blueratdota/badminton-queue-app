@@ -14,6 +14,10 @@ node tools/web-check.js web/index.html
 
 The iPad and web versions now use Locked Teammates instead of the removed Increase Pairing % requests. Older artifact versions can still be checked with the existing tools' `--pairs` option; this export no longer supports it. Compare matching with `tools/web-sim.js --parity` and the iPad's `-parity`, optionally using `--locks` / `-locks`.
 
-Session Settings → Queue matching offers Auto (the existing stages, also used for older saves), Equal Skill (within 1.0 matching rating point; use saved rating when a losing-streak penalty prevents any compatible active group), and Balanced Skill (queue turns with mixed balanced teams). Equal Skill may leave courts waiting. Copied sessions retain their choice.
+Session Settings → Queue matching offers Auto (the existing stages, also used for older saves), Equal Skill (within 1.5 below eight active doubles-eligible players per doubles court, otherwise 1.0; singles stay at 1.0), and Balanced Skill (queue turns with mixed balanced teams). Equal Skill may leave courts waiting. Copied sessions retain their choice.
 
 To compare each mode through the existing deterministic replay, use `--queue-matching auto|equalSkill|balancedSkill` with `tools/web-sim.js --parity`, and the matching `-queue-matching` argument with the iPad's `-parity` launch.
+
+Settings → Export Data Code / Import Data Code moves sessions between devices by copying and pasting the entire text code. No files are needed. Matching session IDs are replaced and other sessions are retained. The code uses the existing JSON export format and is compatible with the iPad and React webapp. Invalid or incomplete codes are rejected before saved sessions change.
+
+Streaks are display-only: 🔥 after three wins and 🧊 after three losses. Matching uses saved ratings capped at 5.0, with no preferential hot/cold teaming. Rating dots keep their normal colors.

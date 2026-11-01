@@ -11,6 +11,7 @@ try {
   }
   // Exercise dashboard states through the real pairing and Start code.
   const assert = require('node:assert/strict');
+  assert(page.upRow('Court 1','doubles',null).includes('Waiting'), 'empty projected lineup renders its format waiting message');
   const session = page.blankSession();
   session.players = Array.from({ length: 12 }, (_, i) => ({
     id: 'preview-' + i, name: 'Player ' + i, skill: 3, pref: 'any', paused: false, readyAt: Date.now()
