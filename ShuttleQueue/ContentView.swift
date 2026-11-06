@@ -16,6 +16,7 @@ struct HomeView: View {
     @State private var importing = false
     @State private var creating = false
     @State private var showAllPlayers = false
+    @State private var showHow = false
     @State private var deleting: SessionState?
 
     var body: some View {
@@ -36,6 +37,10 @@ struct HomeView: View {
                             tile("Create New Session", "Name, courts, length and players", icon: "plus", tint: .court, prominent: true) { creating = true }
                             tile("All Players", "^[\(SessionState.registry(sessions).count) player](inflect: true) across all sessions",
                                  icon: "person.3", tint: .court) { showAllPlayers = true }
+                        }
+                        GridRow {
+                            tile("How the App Works", "The queue, matching modes and ratings", icon: "questionmark", tint: .court) { showHow = true }
+                                .gridCellColumns(2)
                         }
                     }
                     VStack(alignment: .leading, spacing: 12) {
@@ -84,6 +89,7 @@ struct HomeView: View {
             }
             .sheet(isPresented: $creating) { NewSessionSheet(sessions: $sessions) { open = $0 }.capped() }
             .sheet(isPresented: $showAllPlayers) { AllPlayersSheet(sessions: $sessions).capped() }
+            .sheet(isPresented: $showHow) { HowItWorksSheet().capped() }
             .confirmationDialog("Delete \(deleting?.title ?? "this session")?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
                                 titleVisibility: .visible, presenting: deleting) { d in
                 Button("Delete Session", role: .destructive) { sessions.removeAll { $0.id == d.id } }
@@ -312,6 +318,7 @@ struct SettingsSheet: View {
     @State private var confirmEndTournament = false
     @State private var showScheduled = false
     @State private var showLocks = false
+    @State private var showHow = false
     @State private var confirmEnd = false
     @State private var confirmDelete = false
 
@@ -369,6 +376,7 @@ struct SettingsSheet: View {
                             ForEach(QueueMatching.allCases, id: \.self) { Text($0.title).tag($0) }
                         }
                         .pickerStyle(.segmented)
+                        Button("Compare Matching Modes", systemImage: "questionmark.circle") { showHow = true }
                     } header: { Text("Queue matching") } footer: { Text(s.matchingHelp) }
                 }
                 Section("Courts") {
@@ -397,6 +405,7 @@ struct SettingsSheet: View {
             .sheet(isPresented: $showTournamentSetup) { TournamentSetup(s: $s).capped() }
             .sheet(isPresented: $showScheduled) { ScheduledMatchesSheet(s: $s).capped() }
             .sheet(isPresented: $showLocks) { LockSheet(s: $s).capped() }
+            .sheet(isPresented: $showHow) { HowItWorksSheet().capped() }
             .confirmationDialog("End the tournament and go back to the queue?", isPresented: $confirmEndTournament, titleVisibility: .visible) {
                 Button("End Tournament", role: .destructive) { s.tournament = nil }
             } message: {
@@ -2109,5 +2118,83 @@ private struct ImportCodeSheet: View {
                 if !status.isEmpty { Text(status).accessibilityAddTraits(.updatesFrequently) }
             }.navigationTitle("Import Data").toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
+    }
+}
+
+/// How the App Works: the queue, the three matching modes side by side, and ratings, for organisers. RULES.md is the full
+/// spec; keep this and the web version's How the App Works in step with it.
+struct HowItWorksSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    static let queue = [
+        "**Fewest games first.** Whoever has played the fewest counted games is due next; ties go to whoever has rested longest.",
+        "**Rest.** Players just off court sit out the next game when enough rested players are waiting.",
+        "**Late arrivals.** 30+ minutes after the first game, the first 4 late arrivals go to the front of the line, at most 2 in one game.",
+        "**Cancelled games** don't count for anyone, and the four go back to where they were in line.",
+    ]
+    static let glance: [(String, [String])] = [
+        ("Who shares a game", ["Similar ratings first, mixed if needed", "Only your own group: 4.0+ or under 4.0", "Whoever is due next, any ratings"]),
+        ("Teams", ["Balanced", "Balanced", "Balanced"]),
+        ("Can a court sit waiting?", ["No", "Yes, for 4 from one group", "No"]),
+    ]
+    static let modes: [(name: String, lines: [String])] = [
+        ("Auto", ["Tries four players within **1.0** of each other, then **1.5**, then mixed **balanced** teams.",
+                  "Rest and fair game counts come before a close skill match.",
+                  "Good for most nights."]),
+        ("Equal Skill", ["Players split into two groups, **4.0 and up** and **under 4.0**, that never share a game.",
+                         "**4.0+** play only each other, so their games are always within 1.0.",
+                         "**Under 4.0** play **balanced** games among themselves, any ratings.",
+                         "**Not enough players:** if either group has fewer than 4 here (sitting out doesn't count), everyone plays balanced games together until both groups have 4 again.",
+                         "Singles stay within 1.0. Good for keeping strong players together."]),
+        ("Balanced Skill", ["Whoever is due next plays, mixed levels.",
+                            "Teams are balanced: team averages within **0.75**.",
+                            "Good for social nights and small groups."]),
+    ]
+    static let allModes = [
+        "Teams aim for averages within **0.75**; if that's impossible, the fairest split.",
+        "The exact same teams don't face each other twice in a row.",
+        "Locked teammates stay together (in Equal Skill, only within their group). Choose Players and Scheduled Matches override the automatic picks.",
+    ]
+    static let ratings = [
+        "Ratings run **1.0 to 5.0** and change after every game with a winner. Beating a stronger side moves them more.",
+        "A new player's first 8 games move **1.5×** as much, so they find their level quickly; regulars move **0.75×**.",
+        "**Reaching 4.0 takes 3 wins in a row.** Until then a win stops at 3.94 (shown as 3.9).",
+        "**4.0 floor:** once a player reaches 4.0, losing can't take them below 4.0 again. You can still set a lower rating by hand.",
+        "Deleting or correcting a game undoes its rating change exactly.",
+        "🔥 3+ wins in a row and 🧊 3+ losses in a row are display only; they never change matching.",
+        "**Standings** use the win rate with 2 extra wins and 2 extra losses, so a lucky night can't top the table. You need 75% of the night's typical games to be ranked.",
+    ]
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("The queue") { lines(Self.queue) }
+                Section("Matching modes at a glance") {
+                    Grid(alignment: .topLeading, horizontalSpacing: 14, verticalSpacing: 10) {
+                        GridRow {
+                            Text("")
+                            ForEach(Self.modes, id: \.name) { Text($0.name).font(.headline) }
+                        }
+                        ForEach(Self.glance, id: \.0) { row in
+                            Divider()
+                            GridRow {
+                                Text(row.0).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                                ForEach(row.1, id: \.self) { Text($0).font(.subheadline).fixedSize(horizontal: false, vertical: true) }
+                            }
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+                ForEach(Self.modes, id: \.name) { m in Section(m.name) { lines(m.lines) } }
+                Section("Every mode") { lines(Self.allModes) }
+                Section("Ratings and standings") { lines(Self.ratings) }
+            }
+            .navigationTitle("How the App Works")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+    }
+
+    private func lines(_ items: [String]) -> some View {
+        ForEach(items, id: \.self) { Text((try? AttributedString(markdown: $0)) ?? AttributedString($0)) }
     }
 }

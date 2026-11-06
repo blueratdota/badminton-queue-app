@@ -32,7 +32,7 @@ Choose **Settings → Queue matching** while in queue mode.
 | Mode | How it selects games |
 | --- | --- |
 | **Auto — default** | Uses the original queue logic: prefer a 1.0-point skill range, then 1.5, then mixed balanced teams, with game-count and rest protections. Older saves default to Auto. |
-| **Equal Skill** | Keeps automatic games within **1.0 matching rating point** from lowest to highest. If a losing-streak penalty leaves a player without a compatible group in the active roster, use their current saved rating instead. A court waits when no legal group fits. |
+| **Equal Skill** | Splits doubles players into **4.0 and up** and **under 4.0**; games never mix them. Under 4.0 plays balanced games with no rating range. If either group has fewer than 4 active players, everyone plays balanced games together. A court waits when no legal group fits. |
 | **Balanced Skill** | Prioritizes queue turns and balances teams, allowing mixed skill levels without preferring a narrow rating range. |
 
 Matching ratings are capped at **5.0**. The losing-streak fallback applies only to Equal Skill; it changes neither saved ratings nor streak history. Game-count, rest, teammate-lock, and rematch protections still apply. Manual lineups and exact scheduled games retain their overrides. Strict matching does not guarantee a maximum wait. See [RULES.md](RULES.md) for the complete behavior and tunable values.
