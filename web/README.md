@@ -14,7 +14,7 @@ node tools/web-check.js web/index.html
 
 The iPad and web versions now use Locked Teammates instead of the removed Increase Pairing % requests. Older artifact versions can still be checked with the existing tools' `--pairs` option; this export no longer supports it. Compare matching with `tools/web-sim.js --parity` and the iPad's `-parity`, optionally using `--locks` / `-locks`.
 
-Session Settings → Queue matching offers Auto (the existing stages, also used for older saves), Equal Skill (within 1.5 below eight active doubles-eligible players per doubles court, otherwise 1.0; singles stay at 1.0), and Balanced Skill (queue turns with mixed balanced teams). Equal Skill may leave courts waiting. Copied sessions retain their choice.
+Session Settings → Queue matching offers Auto (the existing stages, also used for older saves), Equal Skill (doubles split into 4.0+ and under 4.0, never mixed; under 4.0 plays balanced games; the groups join while either has fewer than 4 active players; singles stay at 1.0), and Balanced Skill (queue turns with mixed balanced teams). Equal Skill may leave courts waiting. Copied sessions retain their choice.
 
 To compare each mode through the existing deterministic replay, use `--queue-matching auto|equalSkill|balancedSkill` with `tools/web-sim.js --parity`, and the matching `-queue-matching` argument with the iPad's `-parity` launch.
 

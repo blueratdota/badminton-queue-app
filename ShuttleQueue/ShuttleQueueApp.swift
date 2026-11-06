@@ -403,7 +403,7 @@ enum QueueMatching: String, Codable, CaseIterable {
     var explanation: String {
         switch self {
         case .auto: return "Similar skill first: within 1.0, then 1.5, then mixed balanced teams."
-        case .equalSkill: return "Doubles stay within 1.5 below eight active players per doubles court, otherwise 1.0. Singles stay within 1.0. Recall fairness uses the same range. Matching uses saved ratings; streaks are display-only."
+        case .equalSkill: return "Doubles players rated 4.0 and up play only each other; everyone under 4.0 plays balanced games among themselves. If either group has fewer than 4 active doubles players, everyone plays balanced games together. Singles stay within 1.0. Matching uses saved ratings; streaks are display-only."
         case .balancedSkill: return "Players due next play with balanced teams, allowing mixed skill levels."
         }
     }
@@ -428,8 +428,17 @@ struct SessionState: Codable, Equatable, Identifiable {
     var scheduledActive: UUID?
 
     var matchingMode: QueueMatching { queueMatching ?? .auto }
-    var matchingHelp: String { matchingMode.explanation + (matchingMode == .equalSkill ? " Current doubles limit: " + String(format: "%.1f", matchingRange()) + "." : "") }
+    var matchingHelp: String { matchingMode.explanation + (matchingMode == .equalSkill ? (splitTiers ? " Groups are split now." : " Groups are together now (one has fewer than 4 players).") : "") }
     static let idealPlayersPerDoublesCourt = 8
+    static let topTier = 4.0 // Equal Skill: doubles players at 4.0+ play only each other; under 4.0, balanced games among themselves
+    /// Equal Skill splits doubles at `topTier` only while each group has 4+ active doubles players (here, not sitting out,
+    /// playing included); a smaller group couldn't fill a court alone, so then everyone plays balanced games together.
+    var splitTiers: Bool {
+        guard matchingMode == .equalSkill else { return false }
+        let active = players.filter { !$0.paused && $0.away != true && ($0.pref == .any || $0.pref == .doubles) }
+        let top = active.filter { matchSkill($0.id) >= Self.topTier }.count
+        return top >= 4 && active.count - top >= 4
+    }
     func matchingRange(_ format: Format = .doubles) -> Double {
         guard matchingMode == .equalSkill, format == .doubles else { return Self.similarSpread }
         let count = courts.filter { $0.format == .doubles }.count
@@ -437,14 +446,14 @@ struct SessionState: Codable, Equatable, Identifiable {
         return count > 0 && active < count * Self.idealPlayersPerDoublesCourt ? Self.widerSpread : Self.similarSpread
     }
     func waitingMessage(_ format: Format = .doubles) -> String {
-        matchingMode == .equalSkill ? "Waiting for a legal group within " + String(format: "%.1f", matchingRange(format)) + " rating points" : "Waiting for available players"
+        matchingMode == .equalSkill ? (format == .doubles ? "Waiting for 4 players from the same group (4.0+ or under 4.0)" : "Waiting for a legal group within " + String(format: "%.1f", matchingRange(format)) + " rating points") : "Waiting for available players"
     }
 
     func skillRangeAllowed(_ ids: [UUID]) -> Bool {
         guard matchingMode == .equalSkill else { return true }
-        let format: Format = ids.count == 2 ? .singles : .doubles
-        let skills = ids.map { matchSkill($0, format: format) }
-        return (skills.max() ?? 0) - (skills.min() ?? 0) <= matchingRange(format) + 1e-9
+        guard ids.count == 2 else { return !splitTiers || Set(ids.map { matchSkill($0) >= Self.topTier }).count <= 1 }
+        let skills = ids.map { matchSkill($0, format: .singles) }
+        return (skills.max() ?? 0) - (skills.min() ?? 0) <= matchingRange(.singles) + 1e-9
     }
 
     mutating func setQueueMatching(_ mode: QueueMatching) {
@@ -536,22 +545,17 @@ struct SessionState: Codable, Equatable, Identifiable {
         return max(low, counts.prefix(needed).last ?? low)
     }
 
-    /// Skill-compatible windows, using matching ratings already carried by the line.
-    static func recallLimits(_ line: [Player], games: [UUID: Int], justOff: Set<UUID>, equalSkill: Bool = false, skillRange: Double = Self.similarSpread) -> [UUID: Int] {
+    /// `splitTiers` (Equal Skill with both groups): a returning player is compared only with their own group (4.0+ or under),
+    /// using matching ratings already carried by the line; otherwise with the whole waiting line.
+    static func recallLimits(_ line: [Player], games: [UUID: Int], justOff: Set<UUID>, splitTiers: Bool = false) -> [UUID: Int] {
         let global = recallLimit(line, games: games, justOff: justOff)
         let off = line.filter { justOff.contains($0.id) }
-        guard equalSkill else { return Dictionary(uniqueKeysWithValues: off.map { ($0.id,global) }) }
-        let sorted = line.sorted { $0.skill < $1.skill }
-        let windows = sorted.indices.map { i in Array(sorted[i...].filter { $0.skill - sorted[i].skill <= skillRange + 1e-9 }) }.filter { $0.count >= 4 }
+        guard splitTiers else { return Dictionary(uniqueKeysWithValues: off.map { ($0.id,global) }) }
         return Dictionary(uniqueKeysWithValues: off.map { p in
-            let compatible = Set(windows.filter { $0.contains { $0.id == p.id } }.flatMap { $0.map(\.id) })
-            let cohort = sorted.filter { compatible.contains($0.id) }
-            guard let low = cohort.map({ games[$0.id,default:0] }).min() else { return (p.id,global) }
+            let cohort = line.filter { ($0.skill >= topTier) == (p.skill >= topTier) }
+            guard cohort.count >= 4, let low = cohort.map({ games[$0.id,default:0] }).min() else { return (p.id,global) }
             let caps = Set([low] + cohort.filter { justOff.contains($0.id) }.map { max(low,games[$0.id,default:0]) }).sorted()
-            let limit = caps.first { cap in
-                let available = cohort.filter { !justOff.contains($0.id) || games[$0.id,default:0] <= cap }
-                return available.indices.contains { i in i >= 3 && available[i].skill - available[i-3].skill <= skillRange + 1e-9 }
-            }
+            let limit = caps.first { cap in cohort.filter { !justOff.contains($0.id) || games[$0.id,default:0] <= cap }.count >= 4 }
             return (p.id,limit ?? global)
         })
     }
@@ -666,13 +670,13 @@ struct SessionState: Codable, Equatable, Identifiable {
     typealias Pick = (splits: [(a: [Player], b: [Player])], penalty: Int, justOff: Int)
 
     static func bestFour(_ q: [Player], pool: [Int], recent: Recent, justOff: Set<UUID>, bySpread: Bool = false,
-                         must: Int = 1, games: [UUID: Int] = [:], heavyFirst: Bool = false, equalSkill: Bool = false, skillRange: Double = Self.similarSpread,
+                         must: Int = 1, games: [UUID: Int] = [:], heavyFirst: Bool = false, splitTiers: Bool = false,
                          allowed: ([Player]) -> Bool) -> Pick? {
         guard pool.count >= 3 else { return nil }
         var best: (key: [Int], splits: [(a: [Player], b: [Player])], penalty: Int)?
         let lk = lockCtx.map { c in c.locks.filter { l in q.contains { $0.id == l.x } && q.contains { $0.id == l.y } } } ?? []
         let ids = { (t: [Player]) in t.map(\.id) }
-        let limits = recallLimits(q, games: games, justOff: justOff, equalSkill: equalSkill, skillRange: skillRange)
+        let limits = recallLimits(q, games: games, justOff: justOff, splitTiers: splitTiers)
         for k in 2..<pool.count {
             for j in 1..<k {
                 for i in 0..<j {
@@ -706,7 +710,7 @@ struct SessionState: Codable, Equatable, Identifiable {
     /// `accept`: an extra test every four must pass.
     static func pickDoubles(_ q: [Player], choice: Int = 0, recent: Recent = [:], must: Int = 1, justOff: Set<UUID> = [],
                             accept: ([Player]) -> Bool = { _ in true },
-                            capSpread: Double? = nil, games: [UUID: Int] = [:], balancedOnly: Bool = false, searchLimit: Int = 12, equalSkill: Bool = false, similarRange: Double = Self.similarSpread) -> Pairing? {
+                            capSpread: Double? = nil, games: [UUID: Int] = [:], balancedOnly: Bool = false, searchLimit: Int = 12, splitTiers: Bool = false, similarRange: Double = Self.similarSpread) -> Pairing? {
         guard q.count >= 4, let head = q.first else { return nil }
         // How far a pick falls short: players straight off court first (rest beats skill match), then repeats past the limit.
         func shortfall(_ g: Pick?) -> [Int] {
@@ -718,7 +722,7 @@ struct SessionState: Codable, Equatable, Identifiable {
         }
         func similarGroup(_ spread: Double) -> Pick? {
             let near = Array(Set(1..<must).union(q.indices.dropFirst().filter { abs(q[$0].skill - head.skill) <= spread + 1e-9 }.prefix(searchLimit))).sorted()
-            return bestFour(q, pool: near, recent: recent, justOff: justOff, must: must, games: games, equalSkill: equalSkill, skillRange: similarRange) { four in
+            return bestFour(q, pool: near, recent: recent, justOff: justOff, must: must, games: games, splitTiers: splitTiers) { four in
                 let s = four.map(\.skill); return s.max()! - s.min()! <= spread + 1e-9 && accept(four)
             }
         }
@@ -733,7 +737,7 @@ struct SessionState: Codable, Equatable, Identifiable {
         // nothing at all is free, so the waiting player still plays.
         func balanced(_ cap: Double?) -> Pick? {
             bestFour(q, pool: Array(1..<min(searchLimit, q.count)), recent: recent, justOff: justOff, bySpread: !balancedOnly, must: must,
-                     games: games, heavyFirst: balancedOnly, equalSkill: equalSkill, skillRange: similarRange) { four in
+                     games: games, heavyFirst: balancedOnly, splitTiers: splitTiers) { four in
                 let t = fairSplits(four)[0], s = four.map(\.skill)
                 return abs(t.a.map(\.skill).reduce(0, +) - t.b.map(\.skill).reduce(0, +)) / 2 <= fairGap && accept(four)
                     && cap.map { s.max()! - s.min()! <= $0 + 1e-9 } ?? true
@@ -746,7 +750,7 @@ struct SessionState: Codable, Equatable, Identifiable {
         }
         var splits = best?.splits
         if splits == nil {
-            let limits = recallLimits(q, games: games, justOff: justOff, equalSkill: equalSkill, skillRange: similarRange), pool = Array(q.prefix(searchLimit))
+            let limits = recallLimits(q, games: games, justOff: justOff, splitTiers: splitTiers), pool = Array(q.prefix(searchLimit))
             outer: for k in 3..<pool.count {
                 for j in 2..<k {
                     for i in 1..<j {
@@ -834,7 +838,7 @@ struct SessionState: Codable, Equatable, Identifiable {
         let counts = gamesCounted, low = line.map { counts[$0.id, default: 0] }.min() ?? 0
         let off = Set(games.last.map { $0.teamA + $0.teamB } ?? [])
         let rated = matchingMode == .equalSkill ? line.map { p -> Player in var x=p;x.skill=matchSkill(p.id);return x } : line
-        let limits = Self.recallLimits(rated, games: counts, justOff: off, equalSkill: matchingMode == .equalSkill, skillRange: matchingRange())
+        let limits = Self.recallLimits(rated, games: counts, justOff: off, splitTiers: splitTiers)
         return (Set(line.filter { counts[$0.id, default: 0] <= low + Self.lockGameLead && (!off.contains($0.id) || counts[$0.id, default: 0] <= limits[$0.id, default: 0]) }.map(\.id)), nil)
     }
 
@@ -874,7 +878,7 @@ struct SessionState: Codable, Equatable, Identifiable {
     }
 
     private func pickCore(_ format: Format, from line: [Player], choice: Int = 0) -> Pairing? {
-        guard matchingMode == .equalSkill else { return pickCoreHead(format, from: line, choice: choice) }
+        guard splitTiers else { return pickCoreHead(format, from: line, choice: choice) }
         for head in line {
             let order = [head] + line.filter { $0.id != head.id }
             if let p = pickCoreHead(format, from: order, choice: choice) { return p }
@@ -901,10 +905,14 @@ struct SessionState: Codable, Equatable, Identifiable {
             pool = unplayed.shuffled(using: &rng) + q.filter { !ids.contains($0.id) }
         }
         pool = overdue + pool
+        // Equal Skill with both groups: only the head's own group (4.0+ or under 4.0) can join this game.
+        let split = format == .doubles && splitTiers
+        if split, let head = pool.first { pool = pool.filter { ($0.skill >= Self.topTier) == (head.skill >= Self.topTier) } }
         let turn = fresh ? 0 : choice
         let off = Set(games.last.map { $0.teamA + $0.teamB } ?? [])
         let recent = format == .doubles ? recentPairs() : [:], must = max(1, overdue.count)
-        let balanced = format == .doubles && balancedOnly
+        // Equal Skill's under-4.0 group plays balanced games, like Balanced Skill.
+        let balanced = format == .doubles && (balancedOnly || split && (pool.first?.skill ?? Self.topTier) < Self.topTier)
         let cap = overdue.isEmpty ? nil : Self.overdueSpread // an overdue game may stretch to 2 levels, balanced, at worst
         // At most 2 late arrivals on their first game in one game, so a wave of arrivals doesn't take over a court.
         let newIDs = Set(line.filter(isNewcomer).map(\.id))
@@ -914,10 +922,6 @@ struct SessionState: Codable, Equatable, Identifiable {
         var even = format == .doubles
         let finalPool = pool
         let fewNew = { (four: [Player]) -> Bool in
-            if matchingMode == .equalSkill {
-                let skills = four.map(\.skill)
-                if skills.max()! - skills.min()! > matchingRange(format) + 1e-9 { return false }
-            }
             if limitNew && four.filter({ newIDs.contains($0.id) }).count > Self.latePerGame { return false }
             guard even else { return true }
             let ids = Set(four.map(\.id))
@@ -927,7 +931,7 @@ struct SessionState: Codable, Equatable, Identifiable {
         func doubles(_ choice: Int) -> Pairing? {
             // Search the whole waiting line while mixing arrivals, so a wave cannot hide the regulars.
             Self.pickDoubles(pool, choice: choice, recent: recent, must: must, justOff: off, accept: fewNew, capSpread: cap,
-                             games: n, balancedOnly: balanced, searchLimit: limitNew ? pool.count : 12, equalSkill: matchingMode == .equalSkill, similarRange: matchingRange(format))
+                             games: n, balancedOnly: balanced, searchLimit: limitNew ? pool.count : 12, splitTiers: split, similarRange: matchingRange(format))
         }
         let singlesPool = matchingMode == .equalSkill ? pool.filter { abs($0.skill - (pool.first?.skill ?? $0.skill)) <= Self.singlesRange + 1e-9 } : pool
         var p = format == .singles ? Self.pickSingles(singlesPool, finishes: results.map(\.end), choice: turn) : doubles(turn)
@@ -973,8 +977,8 @@ struct SessionState: Codable, Equatable, Identifiable {
     }
 
     var activePlayers: Int { players.filter { !$0.paused && $0.away != true }.count } // sitting out and not here don't count
-    /// Explicit mixed-skill mode; Auto retains the original skill stages.
-    var balancedOnly: Bool { matchingMode == .balancedSkill }
+    /// Explicit mixed-skill mode, or Equal Skill with one group too small to split; Auto retains the original skill stages.
+    var balancedOnly: Bool { matchingMode == .balancedSkill || matchingMode == .equalSkill && !splitTiers }
 
     /// What an open court would start right now: the game Up Next lined up for it.
     func nextPairing(for court: Court) -> Pairing? { openCourtPairings()[court.id] }
@@ -1330,13 +1334,13 @@ struct SessionState: Codable, Equatable, Identifiable {
             r.tournamentLabel = t.matches[tm].label
             if let winner { recordTournament(tm, winner: winner) } // "No result" leaves the game to be replayed
         }
-        if let winner {
-            // A win is a win: game length isn't counted (games to 11 and to 21 last very different times).
-            let d = Self.ratingChange(teamA: averageSkill(m.teamA), teamB: averageSkill(m.teamB), aWon: winner == 0)
-            r.changes = adjust(m.teamA, by: d).merging(adjust(m.teamB, by: -d)) { $1 }
-        }
         r.scheduled = m.scheduled; r.jumpers = m.jumpers
         results.append(r)
+        if let winner {
+            // A win is a win: game length isn't counted (games to 11 and to 21 last very different times).
+            let d = Self.ratingChange(teamA: averageSkill(m.teamA), teamB: averageSkill(m.teamB), aWon: winner == 0), last = results.count - 1
+            results[last].changes = adjust(m.teamA, by: d, game: last).merging(adjust(m.teamB, by: -d, game: last)) { $1 }
+        }
         for (n, id) in (m.teamA + m.teamB).enumerated() where winner != nil {
             update(id) { $0.readyAt = now.addingTimeInterval(Double(n) * 0.001); $0.first = nil; $0.since = now }
         }
@@ -1362,7 +1366,7 @@ struct SessionState: Codable, Equatable, Identifiable {
         guard let winner else { return }
         let r = results[i]
         let d = Self.ratingChange(teamA: averageSkill(r.teamA), teamB: averageSkill(r.teamB), aWon: winner == 0)
-        results[i].changes = adjust(r.teamA, by: d).merging(adjust(r.teamB, by: -d)) { $1 }
+        results[i].changes = adjust(r.teamA, by: d, game: i).merging(adjust(r.teamB, by: -d, game: i)) { $1 }
     }
 
     // ponytail: 75% of the median games played; tune if late arrivals or early leavers are still ranked (or too many aren't)
@@ -1380,6 +1384,9 @@ struct SessionState: Codable, Equatable, Identifiable {
     // at which the stronger side is expected to win ~90%. Tune these two if ratings move too fast or too slow.
     static let ratingK = 0.3
     static let ratingSpread = 2.0
+    static let ratingFloor = 4.0 // once a rating reaches 4.0, losses can't take it below 4.0 again
+    // Reaching 4.0 takes `streakLength` (3) wins in a row; until then wins stop at `gateCap`, which still shows as 3.9.
+    static let gateCap = 3.94
     // ponytail: how fast ratings settle (chosen by simulation): a new player's first `newGames` games move `newK` times as much,
     // a regular's `regK` times
     static let newGames = 8, newK = 1.5, regK = 0.75
@@ -1441,17 +1448,32 @@ struct SessionState: Codable, Equatable, Identifiable {
     }
 
     /// Moves ratings within 1–5 and returns what each player actually moved.
-    mutating func adjust(_ ids: [UUID], by d: Double) -> [UUID: Double] {
+    /// Moves ratings by `d` (times each player's speed) and returns the change actually applied. `game`: the result's index,
+    /// so a win can cross 4.0 only as the 3rd win in a row (nil: no streak, as in the self-checks).
+    mutating func adjust(_ ids: [UUID], by d: Double, game: Int?) -> [UUID: Double] {
         var applied: [UUID: Double] = [:]
         for id in ids {
-            let k = kFactor(id)
+            let k = kFactor(id), run = game.map { winRun(id, through: $0) } ?? 0
             update(id) { p in
                 let old = p.skill
-                p.skill = min(5, max(1, old + d * k))
-                applied[id] = p.skill - old
+                var new = min(5, max(old >= Self.ratingFloor ? Self.ratingFloor : 1, old + d * k))
+                if old < Self.ratingFloor, new >= Self.ratingFloor, run < Self.streakLength { new = min(new, max(old, Self.gateCap)) }
+                p.skill = new
+                applied[id] = new - old
             }
         }
         return applied
+    }
+
+    /// Wins in a row ending with result `i` (cancelled games skipped).
+    func winRun(_ id: UUID, through i: Int) -> Int {
+        var run = 0
+        for r in results[...i].reversed() where r.teamA.contains(id) || r.teamB.contains(id) {
+            guard let w = r.winner else { continue }
+            guard (w == 0 ? r.teamA : r.teamB).contains(id) else { break }
+            run += 1
+        }
+        return run
     }
 
     // MARK: Locked teammates
@@ -1644,18 +1666,19 @@ struct SessionState: Codable, Equatable, Identifiable {
         let recallIDs=recall.players.map(\.id),off=Set([recallIDs[5]])
         var counts=Dictionary(uniqueKeysWithValues:recallIDs.map { ($0,1) });counts[recallIDs[0]]=0
         assert(Self.recallLimits(recall.players,games:counts,justOff:off)[recallIDs[5]] == 0,"Auto and Balanced retain global recall comparison")
-        assert(Self.recallLimits(recall.players,games:counts,justOff:off,equalSkill:true)[recallIDs[5]] == 1,"unmatchable lower-skill players cannot block Equal Skill recalls")
+        assert(Self.recallLimits(recall.players,games:counts,justOff:off,splitTiers:true)[recallIDs[5]] == 1,"the other group cannot block Equal Skill recalls")
         counts[recallIDs[1]]=0
-        assert(Self.recallLimits(recall.players,games:counts,justOff:off,equalSkill:true)[recallIDs[5]] == 0,"compatible lower-game players retain protection")
-        counts[recallIDs[1]]=1;recall.players[0].skill=3.5
-        assert(Self.recallLimits(recall.players,games:counts,justOff:off,equalSkill:true)[recallIDs[5]] == 0,"inclusive 1.0-point boundary")
+        assert(Self.recallLimits(recall.players,games:counts,justOff:off,splitTiers:true)[recallIDs[5]] == 0,"compatible lower-game players retain protection")
+        counts[recallIDs[1]]=1;recall.players[0].skill=4
+        assert(Self.recallLimits(recall.players,games:counts,justOff:off,splitTiers:true)[recallIDs[5]] == 0,"4.0 is in the top group")
         let near=fixture([3.1,4,4.5,4.6,4.7,4.8]).players,nearIDs=near.map(\.id)
         var nearCounts=Dictionary(uniqueKeysWithValues:nearIDs.map { ($0,2) });nearCounts[nearIDs[0]]=0
-        assert(Self.recallLimits(near,games:nearCounts,justOff:Set([nearIDs[1]]),equalSkill:true)[nearIDs[1]] == 2,"nearby players need a compatible four-person window")
+        assert(Self.recallLimits(near,games:nearCounts,justOff:Set([nearIDs[1]]),splitTiers:true)[nearIDs[1]] == 2,"a 3.1 player is not in the 4.0 group's window")
         let bridge=fixture([3.4,3.6,4.2,4.4,4.5,4.7,4.9,5]).players,bridgeIDs=bridge.map(\.id)
         let bridgeCounts=Dictionary(uniqueKeysWithValues:zip(bridgeIDs,[2,2,3,4,4,2,3,3]))
-        assert(Self.recallLimits(bridge,games:bridgeCounts,justOff:Set(bridgeIDs[2...4]),equalSkill:true)[bridgeIDs[2]] == 3,"rested players must form an actual compatible quartet")
+        assert(Self.recallLimits(bridge,games:bridgeCounts,justOff:Set(bridgeIDs[2...4]),splitTiers:true)[bridgeIDs[2]] == 3,"rested players must form an actual four from the group")
         recall.players[0].skill=1;recall.queueMatching = .equalSkill
+        for k in 0..<3 { recall.players.append(Player(name:"Low\(k)",skill:1,readyAt:now.addingTimeInterval(Double(10+k)))) } // both groups have 4
         for i in 1..<5 { recall.players[i].credit=1 }
         recall.results.append(GameResult(teamA:[recallIDs[5]],teamB:[UUID()],winner:0,court:"C1",start:now.addingTimeInterval(-600),end:now.addingTimeInterval(-60)))
         recall.moveToFront(recallIDs[5])
@@ -1686,19 +1709,26 @@ struct SessionState: Codable, Equatable, Identifiable {
         s.queueMatching = .auto
         assert(s.pick(.doubles, from: s.players)!.a.map(\.id) == old.a.map(\.id))
         s.setQueueMatching(.equalSkill)
-        assert(s.pick(.doubles, from: s.players) != nil, "small-roster boundary includes 1.5")
-        s.players[3].skill = 3.51
-        assert(s.pick(.doubles, from: s.players) == nil, "no fallback widens strict range")
-        s.setQueueMatching(.balancedSkill)
-        assert(s.pick(.doubles, from: s.players) != nil)
-        s = fixture([1, 3, 3, 3, 3]); s.setQueueMatching(.equalSkill)
-        let p = s.pick(.doubles, from: s.players)!
-        assert(!(p.a+p.b).contains { $0.id == s.players[0].id }, "try later heads")
-        assert(s.pick(.singles, from: Array(s.players.prefix(2))) == nil)
+        assert(!s.splitTiers && s.balancedOnly && s.pick(.doubles, from: s.players) != nil, "no 4.0 group: everyone plays balanced games")
+        // Two groups: 4.0+ only with each other; under 4.0 balanced among themselves (1.0 and 3.9 may share a game).
+        s = fixture([4, 4.2, 4.5, 5, 1, 2, 3, 3.9]); s.setQueueMatching(.equalSkill)
+        assert(s.splitTiers && !s.balancedOnly)
+        let top = Set(s.players.prefix(4).map(\.id))
         for k in 0..<8 {
-            let g = s.pick(.doubles, from: s.players, choice: k)!
-            assert(s.skillRangeAllowed((g.a+g.b).map(\.id)))
+            let g = s.pick(.doubles, from: s.players, choice: k)!, ids = (g.a+g.b).map(\.id)
+            assert(Set(ids.map(top.contains)).count == 1 && s.skillRangeAllowed(ids), "groups never mix")
         }
+        let low = s.pick(.doubles, from: Array(s.players.suffix(4)))!
+        assert(Set((low.a+low.b).map(\.id)) == Set(s.players.suffix(4).map(\.id)), "under 4.0: wide ratings, balanced teams")
+        assert(!s.skillRangeAllowed([s.players[0].id, s.players[1].id, s.players[2].id, s.players[7].id]), "3.9 cannot join the 4.0 group")
+        s.players[3].paused = true
+        assert(!s.splitTiers && s.pick(.doubles, from: [s.players[0], s.players[1], s.players[2], s.players[7]]) != nil, "3 left in a group: groups join")
+        s.players[3].paused = false
+        s = fixture([3, 4, 4.2, 4.4, 4.6, 2, 2.5, 2.8]); s.setQueueMatching(.equalSkill)
+        let p = s.pick(.doubles, from: Array(s.players.prefix(5)))!
+        assert(!(p.a+p.b).contains { $0.id == s.players[0].id }, "try later heads")
+        s = fixture([1, 3, 3, 3, 3]); s.setQueueMatching(.equalSkill)
+        assert(s.pick(.singles, from: Array(s.players.prefix(2))) == nil)
         s = fixture(Array(repeating: 3, count: 8)); s.setQueueMatching(.equalSkill)
         let up = s.queueUpNext
         assert(up.count == 2 && Set(up.flatMap { ($0.a+$0.b).map(\.id) }).count == 8)
@@ -1731,19 +1761,20 @@ struct SessionState: Codable, Equatable, Identifiable {
         s.shuffle(s.courts[0].id)
         s.setQueueMatching(.balancedSkill)
         assert(s.courts[1].plan?.queueOverride == true, "shuffling another court keeps explicit replacement provenance")
-        s = fixture([1, 3, 3, 3]); s.setQueueMatching(.balancedSkill)
-        let stale = s.pick(.doubles, from: s.players)!
+        s = fixture([3, 4.2, 4.4, 4.6, 4, 2, 2, 2]); s.setQueueMatching(.balancedSkill)
+        let stale = s.pick(.doubles, from: Array(s.players.prefix(4)))!
         s.setQueueMatching(.equalSkill); s.fill(s.courts[0].id, shown: stale)
         assert(s.courts[0].match == nil, "Start rejects an outdated wide preview")
-        s = fixture([2, 2, 3.2, 3.2]); s.setQueueMatching(.equalSkill)
+        s = fixture([2, 2, 3.2, 3.2, 4, 4, 4, 4, 2.5]); s.setQueueMatching(.equalSkill)
         for _ in 0..<3 {
             s.results.append(GameResult(teamA: [s.players[2].id,s.players[3].id], teamB: [s.players[0].id,s.players[1].id], winner: 0, court: "C1", start: now.addingTimeInterval(-600), end: now.addingTimeInterval(-60)))
         }
-        s.players[3].skill = 3.7
-        assert(!s.skillRangeAllowed(s.players.map(\.id)) && s.pick(.doubles, from: s.players) == nil, "saved ratings determine strict spread")
-        s = fixture([1, 1, 3, 3]); s.setQueueMatching(.equalSkill)
+        s.players[3].skill = 4
+        let four = Array(s.players.prefix(4))
+        assert(!s.skillRangeAllowed(four.map(\.id)) && s.pick(.doubles, from: four) == nil, "saved ratings decide the group")
+        s = fixture([4, 4, 3.9, 3.9, 2, 2, 2, 2, 4, 4]); s.setQueueMatching(.equalSkill)
         s.players[0].lock = s.players[1].id; s.players[1].lock = s.players[0].id
-        assert(s.pick(.doubles, from: s.players) == nil, "locked-team search cannot bypass strict spread")
+        assert(s.pick(.doubles, from: Array(s.players.prefix(4))) == nil, "locked-team search cannot mix groups")
         var adaptive=fixture(Array(repeating:3,count:15));adaptive.queueMatching = .equalSkill
         assert(adaptive.matchingRange() == 1.5 && adaptive.matchingRange(.singles) == 1)
         adaptive.players.append(Player(name:"Sixteenth",skill:3));assert(adaptive.matchingRange() == 1)
@@ -1755,16 +1786,16 @@ struct SessionState: Codable, Equatable, Identifiable {
         for mode in [QueueMatching.auto,.balancedSkill] {adaptive.queueMatching=mode;adaptive.players[15].paused=true;assert(adaptive.matchingRange() == 1);adaptive.players[15].paused=false}
         adaptive=fixture(Array(repeating:3,count:8));adaptive.queueMatching = .equalSkill;adaptive.courts=Array(adaptive.courts.prefix(1));assert(adaptive.matchingRange() == 1)
         adaptive.players[7].paused=true;assert(adaptive.matchingRange() == 1.5);adaptive.courts=[];assert(adaptive.matchingRange() == 1)
-        adaptive=fixture([3,4.2,4.4,4.5]+Array(repeating:1,count:11));adaptive.queueMatching = .equalSkill
+        adaptive=fixture([3,4.2,4.4,4.5]+Array(repeating:1,count:11));adaptive.queueMatching = .equalSkill // 3 at 4.0+: together
         let adaptiveCourt=adaptive.courts[0].id,wide=adaptive.nextPairing(for:adaptive.courts[0])!
         assert(adaptive.skillRangeAllowed((wide.a+wide.b).map(\.id)))
         adaptive.courts[1].match=Match(teamA:adaptive.players[4...5].map(\.id),teamB:adaptive.players[6...7].map(\.id),start:now)
         let keptPlaying=adaptive.courts[1].match
         adaptive.courts[0].plan=Match(teamA:wide.a.map(\.id),teamB:wide.b.map(\.id))
-        adaptive.players.append(Player(name:"New arrival",skill:1));assert(adaptive.matchingRange() == 1 && adaptive.validPlan(adaptive.courts[0]) == nil)
-        adaptive.fill(adaptiveCourt,shown:wide,at:now);assert(adaptive.courts[0].match == nil && adaptive.courts[1].match == keptPlaying,"tightening rejects stale Start without changing active games")
+        adaptive.players.append(Player(name:"New arrival",skill:4.8));assert(adaptive.splitTiers && adaptive.validPlan(adaptive.courts[0]) == nil)
+        adaptive.fill(adaptiveCourt,shown:wide,at:now);assert(adaptive.courts[0].match == nil && adaptive.courts[1].match == keptPlaying,"splitting rejects stale Start without changing active games")
         let refreshed=adaptive.nextPairing(for:adaptive.courts[0])!;assert(adaptive.skillRangeAllowed((refreshed.a+refreshed.b).map(\.id)))
-        adaptive.players[15].away=true;assert(adaptive.matchingRange() == 1.5)
+        adaptive.players[15].away=true;assert(!adaptive.splitTiers)
         adaptive.courts[0].plan=Match(teamA:wide.a.map(\.id),teamB:wide.b.map(\.id));assert(adaptive.validPlan(adaptive.courts[0]) != nil)
         adaptive.players[15].away=nil;adaptive.courts[0].plan?.queueOverride=true;assert(adaptive.validPlan(adaptive.courts[0]) != nil,"explicit replacement remains an override")
     }
@@ -2227,6 +2258,20 @@ struct SessionState: Codable, Equatable, Identifiable {
         rk.players[0].rated = newGames - 1
         rk.results.append(GameResult(teamA: [rk.players[0].id], teamB: [gx], winner: 0, court: "", start: Date()))
         assert(rk.kFactor(rk.players[0].id) == regK, "after 8 rated games a new player settles to the regular speed")
+        // Reaching 4.0 sets a floor: losses can't take that player below 4.0 again; under 4.0 they drop as usual.
+        var fl = SessionState(players: [4.0, 4.3, 3.9].map { Player(name: "F\($0)", skill: $0) })
+        let flc = fl.adjust(fl.players.map(\.id), by: -1, game: nil)
+        assert(fl.players[0].skill == 4 && fl.players[1].skill == 4 && abs(fl.players[2].skill - 3.15) < 1e-9 && abs(flc[fl.players[1].id]! + 0.3) < 1e-9, "4.0 rating floor")
+        // Crossing into 4.0 takes 3 wins in a row; until then a win stops at 3.94 (a higher legacy rating just holds).
+        var gate = SessionState(players: [Player(name: "G", skill: 3.9), Player(name: "H", skill: 3.97)])
+        let gg = gate.players[0].id, gh = gate.players[1].id
+        for w in [1, 0, 0] { gate.results.append(GameResult(teamA: [gg, gh], teamB: [gx, gy], winner: w, court: "", start: Date())) }
+        let held = gate.adjust([gg, gh], by: 0.3, game: 2)
+        assert(abs(gate.players[0].skill - gateCap) < 1e-9 && abs(held[gg]! - 0.04) < 1e-9 && gate.players[1].skill == 3.97 && held[gh]! == 0, "no 4.0 on 2 wins in a row")
+        gate.results[0].winner = 0
+        _ = gate.adjust([gg], by: 0.3, game: 2)
+        assert(abs(gate.players[0].skill - (gateCap + 0.3 * regK)) < 1e-9, "the 3rd win in a row crosses 4.0")
+        assert(gate.adjust([gg], by: 0.3, game: 1)[gg]! > 0, "wins above 4.0 need no streak")
         // The court names someone overdue only after 25 minutes.
         var due = SessionState(players: (0..<8).map { Player(name: "W\($0)", readyAt: Date(timeIntervalSinceNow: Double($0) - 60)) })
         due.players[7].since = Date(timeIntervalSinceNow: -22 * 60)
@@ -2317,7 +2362,7 @@ struct SessionState: Codable, Equatable, Identifiable {
         assert(abs(st.player(winners[0])!.skill - before) < 1e-9 && st.results.isEmpty, "deleting a game undoes its rating change")
 
         var capped = SessionState(players: [Player(name: "top", skill: 5)])
-        let applied = capped.adjust([capped.players[0].id], by: 0.2)
+        let applied = capped.adjust([capped.players[0].id], by: 0.2, game: nil)
         assert(capped.players[0].skill == 5 && applied.values.first == 0, "ratings stop at 5 and record the real change")
 
         let even = ratingChange(teamA: 3, teamB: 3, aWon: true)
