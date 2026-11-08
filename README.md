@@ -6,11 +6,11 @@ Run a badminton club night without juggling a paper queue. Shuttle Queue manages
 
 ## Screenshots
 
-Actual app screens using a fictional demo roster. The web app adapts to phones and tablets; the native app is designed for iPad.
+Current iPad app screens with a fictional demo roster. Players have seven organiser-set levels, from Low beginner through Pro. The browser version also adapts to phones and tablets.
 
-| Native iPad app | Web courts | Queue matching settings |
+| Home | Live courts and queue | Player levels |
 | --- | --- | --- |
-| <img src="docs/screenshots/ipad-home.png" width="320" alt="Shuttle Queue on iPad showing session creation, All Players, and a live three-court demo session"> | <img src="docs/screenshots/web-courts.jpg" width="260" alt="Web dashboard showing three doubles games in progress with demo players"> | <img src="docs/screenshots/web-matching.jpg" width="260" alt="Web settings with Auto, Equal Skill, and Balanced Skill matching choices"> |
+| <img src="docs/screenshots/ipad-home.png" width="320" alt="Shuttle Queue Home with session creation, All Players, How the App Works, and a demo club night"> | <img src="docs/screenshots/ipad-courts.png" width="320" alt="Three doubles courts playing with the Auto queue and named player levels"> | <img src="docs/screenshots/ipad-levels.png" width="320" alt="All Players showing fictional players across the seven fixed levels"> |
 
 ## Features
 
@@ -37,7 +37,7 @@ See [RULES.md](RULES.md) for the complete behavior and tunable values.
 
 ### Web
 
-Open **[hampashers.netlify.app](https://hampashers.netlify.app)** in a current browser. Choose courts, add players, select a matching mode, and start ready games. Finish each game to record its winner and return players to the queue.
+Open **[hampashers.netlify.app](https://hampashers.netlify.app)** in a current browser. Choose courts, add players and their levels, and start ready games with Auto matching. Finish each game to record its winner and return players to the queue.
 
 Use **Settings → Export Data** to back up a browser's sessions. **Import Data** adds exported sessions and replaces sessions with the same ID. Each browser and device has its own data; iPad and web do not sync automatically. The iPad's JSON export can be imported into the hosted web app.
 
@@ -77,7 +77,7 @@ Free Apple development signing expires after seven days. The app shows its signi
 
 | Location | Purpose |
 | --- | --- |
-| `ShuttleQueue/ShuttleQueueApp.swift` | Models, persistence, queue matching, ratings, self-checks, and simulation |
+| `ShuttleQueue/ShuttleQueueApp.swift` | Models, persistence, queue matching, fixed levels, self-checks, and simulation |
 | `ShuttleQueue/ContentView.swift` | Native session, court, player, and settings UI |
 | `ShuttleQueue/Tournament.swift` | Tournament model, matching, and views |
 | `web/index.html` | Standalone browser app and matching engine |
