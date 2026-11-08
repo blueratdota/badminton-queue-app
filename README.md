@@ -1,6 +1,6 @@
 # Shuttle Queue 🏸
 
-Run a badminton club night without juggling a paper queue. Shuttle Queue manages courts, player turns, balanced matches, ratings, and tournaments on iPad and the web.
+Run a badminton club night without juggling a paper queue. Shuttle Queue manages courts, player turns, balanced matches, player levels, and tournaments on iPad and the web.
 
 [Open the web app](https://hampashers.netlify.app) · [Web app source](https://github.com/blueratdota/badminton-queue-webapp) · [Full playing rules](RULES.md) · [MIT license](LICENSE)
 
@@ -16,10 +16,10 @@ Actual app screens using a fictional demo roster. The web app adapts to phones a
 
 - **Multiple courts:** run singles and doubles together, start ready courts, and see each court's next game without booking a player twice.
 - **Fair player rotation:** counted games and rest order guide selection, with support for arrivals, sitting out, returning players, and organiser adjustments.
-- **Three matching modes:** choose Auto, Equal Skill, or Balanced Skill for each session; copied sessions retain their setting.
+- **Auto matching:** same or neighbouring levels first, then up to two levels apart. Equal Skill and Balanced Skill are hidden for now.
 - **Control when you need it:** shuffle a lineup, keep one side, replace a player, select a manual lineup, or lock regular teammates together.
 - **Scheduled matches:** reserve exact teams after their first game, with court assignment, postponement, cancellation, and queue-priority protections.
-- **Ratings and standings:** Elo-style rating changes, temporary win/loss streak adjustments, match history, result corrections, and standings.
+- **Levels and standings:** seven organiser-set levels, evidence-based level review suggestions, display-only streak markers, match history, and standings.
 - **Tournament play:** round robin followed by a double-elimination bracket, for singles or doubles.
 - **Session management:** create, end, reopen, and revisit sessions; maintain a player registry across nights.
 - **Local data:** the iPad saves on-device; the hosted web app saves in the current browser and supports JSON export/import.
@@ -27,15 +27,11 @@ Actual app screens using a fictional demo roster. The web app adapts to phones a
 
 ## Queue matching
 
-Choose **Settings → Queue matching** while in queue mode.
+Auto prefers players at the same or neighbouring levels, then up to two levels apart. Automatic games never exceed that limit; a court waits when no legal group is available. Game counts, rest, teammate locks, and partnership rotation guide the picks. Manual lineups and exact scheduled games retain their overrides.
 
-| Mode | How it selects games |
-| --- | --- |
-| **Auto — default** | Uses the original queue logic: prefer a 1.0-point skill range, then 1.5, then mixed balanced teams, with game-count and rest protections. Older saves default to Auto. |
-| **Equal Skill** | Splits doubles players into **4.0 and up** and **under 4.0**; games never mix them. Under 4.0 plays balanced games with no rating range. If either group has fewer than 4 active players, everyone plays balanced games together. A court waits when no legal group fits. |
-| **Balanced Skill** | Prioritizes queue turns and balances teams, allowing mixed skill levels without preferring a narrow rating range. |
+Players have seven fixed levels: **Low beginner, High beginner, Low interm, High interm, Low adv, High adv, Pro**. Only the organiser changes a level. Results can trigger a level review suggestion after enough evidence across multiple sessions; they never change levels automatically. Existing players retain their level position when names change; the former top level becomes High adv, with Pro added above it.
 
-Matching ratings are capped at **5.0**. The losing-streak fallback applies only to Equal Skill; it changes neither saved ratings nor streak history. Game-count, rest, teammate-lock, and rematch protections still apply. Manual lineups and exact scheduled games retain their overrides. Strict matching does not guarantee a maximum wait. See [RULES.md](RULES.md) for the complete behavior and tunable values.
+See [RULES.md](RULES.md) for the complete behavior and tunable values.
 
 ## Use the app
 

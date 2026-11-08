@@ -14,10 +14,10 @@ node tools/web-check.js web/index.html
 
 The iPad and web versions now use Locked Teammates instead of the removed Increase Pairing % requests. Older artifact versions can still be checked with the existing tools' `--pairs` option; this export no longer supports it. Compare matching with `tools/web-sim.js --parity` and the iPad's `-parity`, optionally using `--locks` / `-locks`.
 
-Session Settings → Queue matching offers Auto (the existing stages, also used for older saves), Equal Skill (doubles split into 4.0+ and under 4.0, never mixed; under 4.0 plays balanced games; the groups join while either has fewer than 4 active players; singles stay at 1.0), and Balanced Skill (queue turns with mixed balanced teams). Equal Skill may leave courts waiting. Copied sessions retain their choice.
+Players have seven fixed levels (Low beginner … Pro) set by the organiser; results never change them. Queue matching is Auto only for now: same or neighbouring level, then up to 2 levels, never wider (the court waits instead). Equal Skill and Balanced Skill are hidden from Session Settings, and live sessions saved in them load as Auto; their code stays.
 
 To compare each mode through the existing deterministic replay, use `--queue-matching auto|equalSkill|balancedSkill` with `tools/web-sim.js --parity`, and the matching `-queue-matching` argument with the iPad's `-parity` launch.
 
 Settings → Export Data Code / Import Data Code moves sessions between devices by copying and pasting the entire text code. No files are needed. Matching session IDs are replaced and other sessions are retained. The code uses the existing JSON export format and is compatible with the iPad and React webapp. Invalid or incomplete codes are rejected before saved sessions change.
 
-Streaks are display-only: 🔥 after three wins and 🧊 after three losses. Matching uses saved ratings capped at 5.0, with no preferential hot/cold teaming. Rating dots keep their normal colors.
+Streaks are display-only: 🔥 after three wins and 🧊 after three losses. Matching uses the seven fixed levels, with no preferential hot/cold teaming. Rating dots keep their normal colors.

@@ -183,7 +183,8 @@ table.how{width:100%;border-collapse:collapse;font-size:14px;min-width:420px}tab
 .warnc{color:var(--singles)!important}
 .warnf{color:var(--red)}
 .rate{display:flex;flex-direction:column;align-items:center;gap:2px;border:0;background:none;color:inherit;padding:0;cursor:pointer;flex:none}
-.rate small,small.num{font-size:11px;color:var(--label2);font-variant-numeric:tabular-nums}
+.rate small,small.num,small.lvlname{font-size:11px;color:var(--label2);font-variant-numeric:tabular-nums}
+.rate small,small.lvlname{min-width:8em;text-align:center} /* as wide as the longest level name, so dots line up row to row */
 
 /* up next */
 .up{display:grid;gap:2px}
@@ -279,6 +280,7 @@ table.how{width:100%;border-collapse:collapse;font-size:14px;min-width:420px}tab
 .sp-row.out{opacity:.6}
 .chip{font-size:11px;font-weight:700;letter-spacing:.02em;text-transform:uppercase;color:var(--label2)}
 .chip.singles{color:var(--singles)}.chip.doubles{color:var(--accent-ink)}
+.lvcheck{font-size:12px;font-weight:700;white-space:nowrap;color:var(--accent-ink)}.lvcheck.down{color:var(--label2)}
 .ic.on{color:var(--accent-ink)}
 .ic.off{color:var(--label3)}
 
@@ -397,26 +399,24 @@ table.how{width:100%;border-collapse:collapse;font-size:14px;min-width:420px}tab
 <script>
 // ---------- constants & helpers ----------
 const NEED = { singles: 2, doubles: 4 };
-const SKILL = ['New', 'Beginner', 'Intermediate', 'Advanced', 'Strong'];
-// What each level button sets (Add Player, Edit Player's "Set level"). Names still follow the rounded rating, and each preset rounds to its own level.
-const PRESETS = [1, 1.75, 2.5, 3.5, 4.5];
+const SKILL = ['Low beginner', 'High beginner', 'Low interm', 'High interm', 'Low adv', 'High adv', 'Pro'];
+// ponytail: levels stored as fixed points at the old scale’s spacing so matching constants and old saves keep working.
+// Seven levels, 0.8 apart; the organiser sets them and results never change them.
+const PRESETS = [1, 1.8, 2.6, 3.4, 4.2, 5, 5.8];
 const PREFS = ['any', 'singles', 'doubles'];
 // ponytail: tuning knobs, same values as the iPad app
 const RANGE = 1.0;   // singles opponents within 1 level count as fair
 const FAIR = 0.75;   // doubles teams' averages within 0.75 of a level count as fair
 const SIMILAR = 1.0; // doubles "similar skill": all four within 1 level
-const WIDER = 1.5;   // tried when every similar group would repeat recent partners or opponents, or call someone straight back
-const REPEAT_LIMIT = 3; // ponytail: 1 per pair of the four who shared a recent game, 2 more per repeated partnership
+const WIDER = 1.6;   // 2 levels: tried when every similar group would repeat recent partners or opponents, or call someone straight back
+const MAX_SPREAD = 1.6; // ponytail: Auto never builds a game more than 2 levels wide (doubles or singles); the court waits instead
+const REPEAT_LIMIT = 1; // ponytail: any partnership repeated from the last 3 games, even after the best balanced shuffle
 // Nobody should wait longer than 30 minutes. Anyone who has waited 20 (a court still has to free up) plays in the next game,
 // which may stretch to OVERDUE_SPREAD levels with balanced teams at worst. ponytail: 20 chosen by simulation, like the iPad app.
 const WAIT_PRIORITY = 20 * 60000;
 const WAIT_CAP = 30 * 60000;
 const OVERDUE_SPREAD = 2.0;
-const K = 0.3, SPREAD = 2; // rating: most one game can move it; level gap where the stronger side is ~90% to win
-// ponytail: how fast ratings settle, like the iPad app: a new player's first NEW_GAMES games move NEW_K times as much, a regular's REG_K times
-const NEW_GAMES = 8, NEW_K = 1.5, REG_K = 0.75;
-const RATING_FLOOR = 4; // once a rating reaches 4.0, losses can't take it below 4.0 again
-const GATE_CAP = 3.94; // reaching 4.0 takes STREAK (3) wins in a row; until then wins stop here, which still shows as 3.9
+const SPREAD = 2; // simulations only: the rating gap where the stronger side is ~90% to win
 // Streak markers and locked-team cooldown start at three results.
 const STREAK = 3;
 const LATE_FIRST = 4, LATE_PER_GAME = 2; // late arrivals go first while fewer than 4 are waiting; at most 2 in a game
@@ -425,6 +425,10 @@ const LATE_AFTER = 30 * 60000; // arrivals in the first 30 minutes after the fir
 // ponytail: chosen by simulation, like the iPad app: similar-skill groups from 6.25 players per doubles court (13 for 2 courts,
 // 19 for 3, 25 for 4); fewer, balanced teams. EVEN_REPEAT: an even-games pick that repeats this much (all four met lately) gives way.
 const BALANCED_BELOW = 6.25, EVEN_REPEAT = 6;
+// Level checks: suggest a move up or down from results against what the levels predict; only the organiser changes a level.
+// ponytail: chosen with tools/web-levels.js (20 nights, 28 players, 3 courts): a player one level off is usually flagged within
+// 8–14 nights, under 1 false flag per 10 nights. A shorter window flags faster but far more falsely. Same values as the iPad app.
+const LEVEL_WINDOW = 40, LEVEL_MIN_GAMES = 30, LEVEL_MIN_SESSIONS = 2, PROMOTE_MARGIN = 8, DEMOTE_MARGIN = 8, PROMOTE_HIGHER_WINS = 3, SNOOZE_GAMES = 10;
 const LOCK_REMATCH_GAMES = 2;
 const LOCK_GAME_LEAD = 1;
 const LOCK_EQUAL = 0.5; // locked teammates: opponents' average at least the pair's (within display rounding)
@@ -435,14 +439,13 @@ const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;'
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36));
 const clone = o => JSON.parse(JSON.stringify(o));
 const cmp = (a, b) => { for (let i = 0; i < a.length; i++) { if (a[i] < b[i]) return -1; if (a[i] > b[i]) return 1; } return 0; };
-const level = sk => Math.min(5, Math.max(1, Math.round(sk)));
-const r1 = x => (Math.round(x * 10) / 10).toFixed(1);
+const level = sk => Math.min(PRESETS.length, Math.max(1, Math.round((Math.min(PRESETS.at(-1), sk) - 1) / 0.8) + 1)); // nearest level; old decimal ratings read as their nearest level
 const mulberry32 = a => () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
 const shuffled = (arr, rng) => { const a = [...arr]; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 const streakEmoji = count => count >= STREAK ? '🔥' : count <= -STREAK ? '🧊' : '';
 const dots = (sk, count = 0) => {
   const marker=streakEmoji(count);
-  return `<span class="dots" ${marker ? `role="img" aria-label="On a ${count > 0 ? 'win' : 'losing'} streak"` : 'aria-hidden="true"'}>${[1,2,3,4,5].map(i=>`<i class="${i<=level(sk)?'on':''}"></i>`).join('')}${marker ? `<span class="streak-marker" aria-hidden="true">${marker}</span>` : ''}</span>`;
+  return `<span class="dots" ${marker ? `role="img" aria-label="On a ${count > 0 ? 'win' : 'losing'} streak"` : 'aria-hidden="true"'}>${[1,2,3,4,5,6,7].map(i=>`<i class="${i<=level(sk)?'on':''}"></i>`).join('')}${marker ? `<span class="streak-marker" aria-hidden="true">${marker}</span>` : ''}</span>`;
 };
 
 // ---------- state ----------
@@ -481,8 +484,29 @@ function editEverywhere(old, name, skill = null) {
   const changed = [];
   for (const x of sessions.values()) {
     let hit = false;
-    for (const p of x.players) if (p.name.toLowerCase() === old.toLowerCase()) { p.name = name; if (skill != null) p.skill = skill; hit = true; }
+    for (const p of x.players) if (p.name.toLowerCase() === old.toLowerCase()) { p.name = name; if (skill != null && level(skill) !== level(p.skill)) { p.levelSet = Date.now(); delete p.levelSnooze; } if (skill != null) p.skill = skill; hit = true; }
     if (hit) changed.push(x);
+  }
+  return changed;
+}
+/** All Players delete: removes this person (by name, ignoring case) from every session's roster, with their locks and
+    hand-set lineups; games stay in the history as "Removed player". Returns the sessions changed, or null (changing nothing)
+    while they're on a court in a live session. */
+function deleteEverywhere(name) {
+  const key = name.toLowerCase(), all = [...sessions.values()];
+  if (all.some(x => x.ended == null && x.players.some(p => p.name.toLowerCase() === key && x.courts.some(c => c.match && [...c.match.a, ...c.match.b].includes(p.id))))) return null;
+  const changed = [];
+  for (const x of all) {
+    const gone = new Set(x.players.filter(p => p.name.toLowerCase() === key).map(p => p.id));
+    if (!gone.size) continue;
+    x.players = x.players.filter(p => !gone.has(p.id));
+    for (const p of x.players) if (gone.has(p.lock)) p.lock = null;
+    for (const c of x.courts) {
+      if (c.plan && [...c.plan.a, ...c.plan.b].some(id => gone.has(id))) c.plan = null;
+      if (c.manual) c.manual = c.manual.map(id => gone.has(id) ? null : id);
+    }
+    if (x.scheduled) x.scheduled = x.scheduled.filter(r => ![...r.a, ...r.b].some(id => gone.has(id)));
+    changed.push(x);
   }
   return changed;
 }
@@ -603,14 +627,11 @@ function recentPairs(games = 3) {
   }
   return out;
 }
-/** How much a lineup repeats recent games: 1 for every pair of the four who shared a recent game, plus 2 for each team that partnered lately. */
+/** How much a lineup repeats recent games: the number of its teams that partnered lately. Meeting the same players again
+    is fine when the teams are shuffled (a repeated opponent pair is a repeated partnership on their side). */
 function repeats(a, b, recent) {
-  const met = (x, y) => [[x, y], [y, x]].some(([p, q]) => { const r = recent[p.id]; return !!r && (r.partners.has(q.id) || r.opponents.has(q.id)); });
   const partnered = (x, y) => !!(recent[x.id]?.partners.has(y.id) || recent[y.id]?.partners.has(x.id));
-  const four = [...a, ...b]; let n = 0;
-  for (let i = 0; i < four.length; i++) for (let j = i + 1; j < four.length; j++) if (met(four[i], four[j])) n++;
-  for (const t of [a, b]) if (t.length === 2 && partnered(t[0], t[1])) n += 2;
-  return n;
+  return [a, b].filter(t => t.length === 2 && partnered(t[0], t[1])).length;
 }
 // Equal Skill with both groups: each recalled player competes only with their own group (4.0+ or under), using the
 // matching ratings the line carries; otherwise with the whole waiting line.
@@ -649,10 +670,10 @@ function bestFour(q, pool, recent, justOff, { bySpread = false, must = 1, games 
       && (!lk.length || keepsLocks(idsOf(s.a), idsOf(s.b), lk, lockCtx.strict, lockCtx.protection)));
     if (!fair.length) continue;
     if(four.some(p=>justOff.has(p.id)&&(games[p.id]||0)>limits[p.id])) continue;
-    const splits=fair.map((sp,o)=>({sp,o})).sort((x,y)=>Math.abs(sum(x.sp.a)-sum(x.sp.b))-Math.abs(sum(y.sp.a)-sum(y.sp.b))||x.o-y.o);
-    const sk=four.map(p=>p.skill),range=Math.max(...sk)-Math.min(...sk);
-    const key=[four.filter(p=>justOff.has(p.id)).length,...(bySpread?[Math.round(range*4)]:[]),picked.reduce((a,i)=>a+(games[q[i].id]||0),0),...(bySpread?[Math.round(range*100)]:[]),pool[k],picked.reduce((a,b)=>a+b,0)];
-    if (!best || cmp(key, best.key) < 0) best = { key, pen: 0, splits: splits.map(x => x.sp) };
+    const splits=fair.map((sp,o)=>({sp,o,r:repeats(sp.a,sp.b,recent)})).sort((x,y)=>x.r-y.r||Math.abs(sum(x.sp.a)-sum(x.sp.b))-Math.abs(sum(y.sp.a)-sum(y.sp.b))||x.o-y.o);
+    const sk=four.map(p=>p.skill),range=Math.max(...sk)-Math.min(...sk),rep=splits[0].r;
+    const key=[four.filter(p=>justOff.has(p.id)).length,...(bySpread?[Math.round(range*4)]:[]),picked.reduce((a,i)=>a+(games[q[i].id]||0),0),rep,...(bySpread?[Math.round(range*100)]:[]),pool[k],picked.reduce((a,b)=>a+b,0)];
+    if (!best || cmp(key, best.key) < 0) best = { key, pen: rep, splits: splits.map(x => x.sp) };
   }
   return best && { splits: best.splits, penalty: best.pen, justOff: best.key[0] };
 }
@@ -664,13 +685,13 @@ function pickDoubles(q, choice = 0, { recent = {}, must = 1, justOff = new Set()
   if (q.length < 4) return null;
   const head = q[0];
   // How far a pick falls short: players straight off court first (rest beats skill match), then repeats past the limit.
-  const shortfall = g => g ? [g.justOff, 0] : [Infinity, Infinity];
+  const shortfall = g => g ? [g.justOff, g.penalty >= REPEAT_LIMIT ? g.penalty : 0] : [Infinity, Infinity];
   const fine = g => cmp(shortfall(g), [0, 0]) === 0;
-  const reason = (from, to) => (from?.justOff ?? 0) > to.justOff ? (to.justOff ? 'so fewer go straight back' : 'so nobody goes straight back') : 'for balanced teams';
+  const reason = (from, to) => (from?.justOff ?? 0) > to.justOff ? (to.justOff ? 'so fewer go straight back' : 'so nobody goes straight back') : from && shortfall(from)[1] > shortfall(to)[1] ? 'for fresh opponents' : 'for balanced teams';
   const similarGroup = spread => {
     const near = [...new Set([...Array.from({ length: must - 1 }, (_, i) => i + 1),
       ...q.map((_, i) => i).slice(1).filter(i => Math.abs(q[i].skill - head.skill) <= spread + 1e-9).slice(0, searchLimit)])].sort((a, b) => a - b);
-    return bestFour(q, near, recent, justOff, { must, games, allowed: four => { const s = four.map(p => p.skill); return Math.max(...s) - Math.min(...s) <= spread + 1e-9 && accept(four); } });
+    return bestFour(q, near, recent, justOff, { must, games, allowed: four => { const s = four.map(p => p.skill); const t = fairSplits(four)[0]; return Math.max(...s) - Math.min(...s) <= spread + 1e-9 && Math.abs(sum(t.a) - sum(t.b)) / 2 <= FAIR + 1e-9 && accept(four); } });
   };
   // balancedOnly (too few players for similar groups): straight to even teams, in queue order, no rating-range preference.
   let best = balancedOnly ? null : similarGroup(matchingRange()), note = null;
@@ -731,8 +752,8 @@ const lastOffCourt = () => { const r = counted().at(-1); return new Set(r ? [...
 const activePlayers = () => S.players.filter(p => !p.paused && !p.away).length; // sitting out and not here don't count
 /** All courts doubles and fewer than 6.25 players per court here: balanced teams instead of similar-skill groups. */
 const matchingMode = () => S.queueMatching || 'auto';
-const matchingHelp = () => ({auto:'Similar skill first: within 1.0, then 1.5, then mixed balanced teams.',equalSkill:`Doubles players rated 4.0 and up play only each other; everyone under 4.0 plays balanced games among themselves. If either group has fewer than 4 active doubles players, everyone plays balanced games together. ${splitTiers()?'Groups are split now.':'Groups are together now (one has fewer than 4 players).'} Singles stay within 1.0. Matching uses saved ratings; streaks are display-only.`,balancedSkill:'Players due next play with balanced teams, allowing mixed skill levels.'})[matchingMode()];
-const waitingMessage = (format='doubles') => matchingMode()==='equalSkill' ? (format==='doubles' ? 'Waiting for 4 players from the same group (4.0+ or under 4.0)' : `Waiting for a legal group within ${matchingRange(format).toFixed(1)} rating points`) : 'Waiting for available players';
+const matchingHelp = () => ({auto:'Similar levels first: same or neighbouring level, then 2 levels apart. Never wider than 2 levels; the court waits instead.',equalSkill:`Doubles players rated 4.0 and up play only each other; everyone under 4.0 plays balanced games among themselves. If either group has fewer than 4 active doubles players, everyone plays balanced games together. ${splitTiers()?'Groups are split now.':'Groups are together now (one has fewer than 4 players).'} Singles stay within 1.0. Matching uses saved ratings; streaks are display-only.`,balancedSkill:'Players due next play with balanced teams, allowing mixed skill levels.'})[matchingMode()];
+const waitingMessage = (format='doubles') => matchingMode()==='auto' ? 'Waiting for players within 2 levels of each other' : matchingMode()==='equalSkill' ? (format==='doubles' ? 'Waiting for 4 players from the same group (4.0+ or under 4.0)' : `Waiting for a legal group within ${matchingRange(format).toFixed(1)} rating points`) : 'Waiting for available players';
 const IDEAL_PER_DOUBLES_COURT = 8;
 function matchingRange(format='doubles') {
   if(matchingMode()!=='equalSkill'||format!=='doubles')return SIMILAR;
@@ -752,6 +773,7 @@ function splitTiers() {
 /** Explicit mixed-skill mode, or Equal Skill with one group too small to split. */
 const balancedOnly = () => matchingMode() === 'balancedSkill' || matchingMode() === 'equalSkill' && !splitTiers();
 function skillRangeAllowed(ids) {
+  if(matchingMode()==='auto'){const s=ids.map(id=>matchSkill(id,ids.length===2?'singles':'doubles'));return Math.max(...s)-Math.min(...s)<=MAX_SPREAD+1e-9;}
   if(matchingMode()!=='equalSkill')return true;
   if(ids.length!==2)return !splitTiers()||new Set(ids.map(id=>matchSkill(id)>=TOP_TIER)).size<=1;
   const skills=ids.map(id=>matchSkill(id,'singles'));
@@ -940,7 +962,7 @@ function lockNotes(p, locks) {
   return p;
 }
 function pickCore(f, line, choice = 0) {
-  if(!splitTiers()) return pickCoreHead(f,line,choice);
+  if(!splitTiers()&&matchingMode()!=='auto') return pickCoreHead(f,line,choice); // Auto's 2-level cap: if the head can't play, try the next in line
   for(const head of line) {
     const p=pickCoreHead(f,[head,...line.filter(p=>p.id!==head.id)],choice);
     if(p)return p;
@@ -971,7 +993,8 @@ function pickCoreHead(f, line, choice = 0) {
   // At most 2 late arrivals on their first game in one game, so a wave of arrivals doesn't take over a court.
   const newIds = new Set(line.filter(newcomer).map(p => p.id));
   let limitNew=!!opts&&newIds.size>LATE_PER_GAME,evenGames=!!opts;
-  const fewNew=four=>!limitNew||four.filter(p=>newIds.has(p.id)).length<=LATE_PER_GAME;
+  const capped=matchingMode()==='auto';
+  const fewNew=four=>(!capped||Math.max(...four.map(p=>p.skill))-Math.min(...four.map(p=>p.skill))<=MAX_SPREAD+1e-9)&&(!limitNew||four.filter(p=>newIds.has(p.id)).length<=LATE_PER_GAME);
   // Even games: nobody plays while someone with fewer games is left waiting (a late arrival counts at par), so similar-skill
   // groups don't leave anyone 2 games behind.
   const even = four => { const ids = new Set(four.map(p => p.id)), rest = pool.filter(p => !ids.has(p.id));
@@ -981,7 +1004,8 @@ function pickCoreHead(f, line, choice = 0) {
     // Search the whole waiting line while mixing arrivals, so a wave cannot hide the regulars.
     opts.searchLimit=limitNew?pool.length:12;
   }
-  const singlesPool=matchingMode()==='equalSkill'?pool.filter(p=>Math.abs(p.skill-pool[0].skill)<=RANGE+1e-9):pool;
+  const singlesCap=matchingMode()==='equalSkill'?RANGE:matchingMode()==='auto'?MAX_SPREAD:null;
+  const singlesPool=singlesCap!=null?pool.filter(p=>Math.abs(p.skill-pool[0].skill)<=singlesCap+1e-9):pool;
   let p = f === 'singles' ? pickSingles(singlesPool, S.results.map(r => r.end), turn) : pickDoubles(pool, turn, opts);
   if ((!p || Math.abs(sum(p.a)-sum(p.b))/2>FAIR) && evenGames) {
     evenGames=false;p=pickDoubles(pool,turn,opts)||p;
@@ -1231,7 +1255,7 @@ function fill(cid, shown) {
   c.shuffles = 0; c.plan = null; c.locked = null;
   refreshSchedule();
 }
-const ratingChange = (ta, tb, aWon) => K * ((aWon ? 1 : 0) - 1 / (1 + 10 ** ((tb - ta) / SPREAD)));
+
 /** Standings score, 0–100: the win rate with two extra wins and two extra losses, so one or two lucky games can't top
     the table. Game length doesn't count. Equal records score exactly the same, a draw. A cancelled game doesn't count. */
 function score(id) {
@@ -1246,36 +1270,13 @@ function places(scores) {
   return out;
 }
 /** How much one game moves a rating: more over a new player's first games, less for regulars (anyone without a count). */
-const kFactor = p => p.rated != null && p.rated + played(p.id) < NEW_GAMES ? NEW_K : REG_K;
-/** Moves ratings by `d` (times each player's speed) and returns the change actually applied. `game`: the result's index, so
-    a win can cross 4.0 only as the 3rd win in a row (null: no streak, as in the self-checks). */
-function adjust(ids, d, game) {
-  const out = {};
-  for (const id of ids) { const p = P(id); if (!p) continue; const old = p.skill, run = game == null ? 0 : winRun(id, game);
-    let next = Math.min(5, Math.max(old >= RATING_FLOOR ? RATING_FLOOR : 1, old + d * kFactor(p)));
-    if (old < RATING_FLOOR && next >= RATING_FLOOR && run < STREAK) next = Math.min(next, Math.max(old, GATE_CAP));
-    p.skill = next; out[id] = next - old; }
-  return out;
-}
-/** Wins in a row ending with result `i` (cancelled games skipped). */
-function winRun(id, i) {
-  let run = 0;
-  for (let j = i; j >= 0; j--) { const r = S.results[j]; if (!r.a.includes(id) && !r.b.includes(id) || r.winner == null) continue;
-    if (!(r.winner === 0 ? r.a : r.b).includes(id)) break; run++; }
-  return run;
-}
-/** Ends the game on a court. With a winner (0 = team A, 1 = team B), moves both teams' ratings. Without one the game is
+/** Ends the game on a court (0 = team A won, 1 = team B; levels never change). Without a winner the game is
     cancelled: it's kept in the history, but like Undo Start the players are back exactly where they were in line. */
 function finish(cid, winner) {
   const c = courtById(cid); const m = c?.match; if (!m) return;
   const r = { a: m.a, b: m.b, winner, court: c.name, start: m.start, end: Date.now(), changes: null, label: null, scheduled:m.scheduled ?? null, jumpers:m.jumpers ?? null };
   if (m.tm != null && S.tournament) { r.label = S.tournament.matches[m.tm].label; if (winner != null) recordTournament(m.tm, winner); }
   S.results.push(r);
-  if (winner != null) {
-    // A win is a win: game length isn't counted (games to 11 and to 21 last very different times).
-    const d = ratingChange(avg(m.a), avg(m.b), winner === 0), last = S.results.length - 1;
-    r.changes = { ...adjust(m.a, d, last), ...adjust(m.b, -d, last) };
-  }
   const now = Date.now();
   if (winner != null) [...m.a, ...m.b].forEach((id, n) => { const p = P(id); if (p) { p.readyAt = now + n; p.first = false; p.since = now; } });
   c.match = null;
@@ -1285,19 +1286,13 @@ function finish(cid, winner) {
 /** End Session: games still on court are cancelled, then the session is marked ended. */
 function endSession() { for (const c of S.courts) if (c.match) finish(c.id, null); S.ended = Date.now(); normalizeEnd(); refreshSchedule(); }
 function deleteResult(i) {
-  const r = S.results.splice(i, 1)[0];
-  for (const [id, d] of Object.entries(r.changes || {})) { const p = P(id); if (p) p.skill -= d; }
+  S.results.splice(i, 1); // levels are fixed: old stored rating changes are ignored
   normalizeEnd(); refreshSchedule();
 }
-/** Corrects a finished game's result (0 = team A won, 1 = team B, null = cancelled): undoes the rating change it made,
-    then applies the corrected one, worked out as when a game finishes. Places in line aren't touched. */
+/** Corrects a finished game's result (0 = team A won, 1 = team B, null = cancelled). Places in line and levels aren't touched. */
 function setWinner(i, winner) {
   const r = S.results[i]; if (!r || r.winner === winner) return;
-  for (const [id, d] of Object.entries(r.changes || {})) { const p = P(id); if (p) p.skill -= d; }
-  r.changes = null; r.winner = winner; normalizeEnd();
-  if (winner == null) return;
-  const d = ratingChange(avg(r.a), avg(r.b), winner === 0);
-  r.changes = { ...adjust(r.a, d, i), ...adjust(r.b, -d, i) };
+  r.winner = winner; normalizeEnd();
 }
 // ponytail: 75% of the median games played; tune if late arrivals or early leavers are still ranked (or too many aren't)
 const RANK_SHARE = 0.75;
@@ -1341,9 +1336,9 @@ function arrive(id) {
 }
 
 // ---------- replacing a player in "Next up" ----------
-/** The rating matching uses: the saved rating capped at 5.0. The screen always shows the real one. */
+/** The level point matching uses (old decimal ratings read as their nearest level). */
 function matchSkill(id, format = 'doubles') {
-  return Math.min(5, P(id)?.skill ?? 3);
+  return PRESETS[level(P(id)?.skill ?? 3.4) - 1];
 }
 const avgMatch = ids => { const s = ids.filter(P).map(id=>matchSkill(id,ids.length===1?'singles':'doubles')); return s.length ? s.reduce((a, b) => a + b, 0) / s.length : 3; };
 const unevenness = (a, b) => Math.abs(avgMatch(a) - avgMatch(b));
@@ -1544,8 +1539,45 @@ function registry() {
       out.set(k, r);
     }
   }
+  for (const r of out.values()) r.check = levelCheck(r.name); // ponytail: walks every session per person; cache if All Players gets slow
   return [...out.values()].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
 }
+/** Level check for one person (matched by name, ignoring case): their last LEVEL_WINDOW games with a winner since their level
+    was last set, against the win chance the two teams' levels give. { dir: 'up'|'down', to, games, wins, expected, higherGames,
+    higherWins } when the results clearly don't fit the level, else null. Matching never reads it. */
+function levelCheck(name, list = [...sessions.values()]) {
+  const k = name.toLowerCase(), games = [];
+  let set = 0, snooze = 0, lv = 0;
+  for (const x of [...list].sort((a, b) => a.date - b.date)) {
+    const me = x.players.find(p => p.name.toLowerCase() === k); if (!me) continue;
+    set = Math.max(set, me.levelSet || 0); snooze = Math.max(snooze, me.levelSnooze || 0); lv = level(me.skill);
+    const skills = new Map(x.players.map(p => [p.id, p.skill])), sk = id => skills.get(id);
+    for (const g of counted(x)) {
+      const mine = g.a.includes(me.id) ? g.a : g.b.includes(me.id) ? g.b : null; if (!mine) continue;
+      const theirs = mine === g.a ? g.b : g.a, a = mine.map(sk), b = theirs.map(sk);
+      if ([...a, ...b].some(v => v == null)) continue; // a removed player: no level to compare
+      const mean = v => v.reduce((s, y) => s + y, 0) / v.length;
+      games.push({ end: g.end ?? 0, session: x.id, won: (g.winner === 0 ? g.a : g.b) === mine,
+        chance: 1 / (1 + 10 ** ((mean(b) - mean(a)) / SPREAD)), higher: b.some(v => level(v) > level(me.skill)) });
+    }
+  }
+  const recent = games.filter(g => g.end > set).sort((a, b) => a.end - b.end).slice(-LEVEL_WINDOW);
+  if (recent.length < LEVEL_MIN_GAMES || new Set(recent.map(g => g.session)).size < LEVEL_MIN_SESSIONS) return null;
+  if (snooze && games.filter(g => g.end > snooze).length < SNOOZE_GAMES) return null;
+  const wins = recent.filter(g => g.won).length, expected = recent.reduce((s, g) => s + g.chance, 0);
+  const higher = recent.filter(g => g.higher), higherWins = higher.filter(g => g.won).length;
+  const ev = { games: recent.length, wins, expected, higherGames: higher.length, higherWins };
+  if (lv < SKILL.length && wins - expected >= PROMOTE_MARGIN && higherWins >= PROMOTE_HIGHER_WINS) return { dir: 'up', to: lv + 1, ...ev };
+  if (lv > 1 && expected - wins >= DEMOTE_MARGIN) return { dir: 'down', to: lv - 1, ...ev };
+  return null;
+}
+/** "Not yet" on a level check: hides it for this person in every session until SNOOZE_GAMES more games; returns the sessions changed. */
+function snoozeEverywhere(name) {
+  const changed = [];
+  for (const x of sessions.values()) if (x.players.some(p => p.name.toLowerCase() === name.toLowerCase())) { for (const p of x.players) if (p.name.toLowerCase() === name.toLowerCase()) p.levelSnooze = Date.now(); changed.push(x); }
+  return changed;
+}
+const levelCheckLabel = c => c.dir === 'up' ? `↑ Ready for ${SKILL[c.to - 1]}` : '↓ Check level';
 const isDupEverywhere = (name, old) => !!name && name.toLowerCase() !== old.toLowerCase() && registry().some(r => r.name.toLowerCase() === name.toLowerCase());
 const isDupName = (name, except) => !!name && S.players.some(p => p.id !== except && p.name.toLowerCase() === name.toLowerCase());
 
@@ -1588,7 +1620,7 @@ const ic = (name, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" aria-
 document.querySelectorAll('[data-icon]').forEach(el => el.insertAdjacentHTML('afterbegin', ic(el.dataset.icon)));
 const cap = s => s[0].toUpperCase() + s.slice(1);
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
-const rating = (p, count = 0) => `<span class="rate" aria-label="Skill ${SKILL[level(p.skill) - 1]}, rating ${r1(p.skill)}">${dots(p.skill, count)}<small>${r1(p.skill)}</small></span>`;
+const rating = (p, count = 0) => `<span class="rate" aria-label="Level ${SKILL[level(p.skill) - 1]}">${dots(p.skill, count)}<small>${SKILL[level(p.skill) - 1]}</small></span>`;
 /** An inset-grouped list section: optional header, rows on a rounded card, optional footer. */
 const section = (head, rows, foot = '') => `<section class="sec">${head ? `<h2 class="sec-h">${esc(head)}</h2>` : ''}<div class="group">${rows}</div>${foot ? `<p class="sec-f">${foot}</p>` : ''}</section>`;
 
@@ -1670,7 +1702,7 @@ function homeView() {
   return `<img src="logo.png" alt="Hampashers Badminton" style="display:block;width:100%;height:180px;object-fit:contain;margin-bottom:28px">
     <div class="tiles">
       ${tile('Create New Session', 'Name, courts, length and players', 'plus', 'data-act="open" data-modal="newSession"', 'hero')}
-      ${tile('All Players', `${plural(registry().length, 'player')} across all sessions`, 'users', 'data-act="open" data-modal="allPlayers"', 't-teal')}
+      ${tile('All Players', (reg => `${plural(reg.length, 'player')} across all sessions${reg.some(r => r.check) ? ` · ${plural(reg.filter(r => r.check).length, 'level check')}` : ''}`)(registry()), 'users', 'data-act="open" data-modal="allPlayers"', 't-teal')}
       ${tile('How the App Works', 'The queue, matching modes and ratings', 'help', 'data-act="open" data-modal="howItWorks"', 't-teal')}
     </div>
     <h2 class="home-h">Live Sessions</h2>
@@ -1797,7 +1829,7 @@ function menuSpec({ kind, id }) {
     case 'pref': { const p = P(id); if (!p) return null; return { checks: true, items: [{ header: 'Plays' },
       ...PREFS.map(v => it(cap(v), 'setPref', { id, data: { v }, checked: p.pref === v }))] }; }
     case 'player': { const p = P(id); if (!p) return null; return { items: [
-      it('Edit Name or Rating', 'edit', { id, icon: 'pencil' }),
+      it('Edit Name or Level', 'edit', { id, icon: 'pencil' }),
       it(p.paused ? 'Back In' : 'Sit Out', 'pause', { id, icon: p.paused ? 'play' : 'pause' }),
       it('Move to Front', 'front', { id, icon: 'toFront' }), it('Not Here', 'away', { id, icon: 'pause' }), { divider: true },
       it('Remove from Session', 'askRemove', { id, icon: 'trash', danger: true })] }; }
@@ -1805,7 +1837,7 @@ function menuSpec({ kind, id }) {
       message: "They leave this session's queue. Games they played stay in the history.",
       items: [it(`Remove ${p.name}`, 'rm', { id, danger: true })] }; }
     case 'game': { const r = S.results[+id]; if (!r) return null; const fixable = !r.label; // a tournament game's winner moved the bracket on
-      return { confirm: true, title: `Game ${+id + 1}: ${names(r.a)} vs ${names(r.b)}`, message: 'Ratings are corrected to match.', items: [
+      return { confirm: true, title: `Game ${+id + 1}: ${names(r.a)} vs ${names(r.b)}`, message: 'Standings are corrected to match.', items: [
         ...(fixable && r.winner !== 0 ? [it(`${names(r.a)} won`, 'gameWin', { id, data: { w: '0' } })] : []),
         ...(fixable && r.winner !== 1 ? [it(`${names(r.b)} won`, 'gameWin', { id, data: { w: '1' } })] : []),
         ...(fixable && r.winner != null ? [it('Cancelled (no result)', 'gameWin', { id, data: { w: 'none' } })] : []),
@@ -1814,6 +1846,9 @@ function menuSpec({ kind, id }) {
       items: [it(names(m.a), 'win', { id, data: { w: '0' } }), it(names(m.b), 'win', { id, data: { w: '1' } }), it('Cancel Game (no result)', 'win', { id, data: { w: 'none' } })] }; }
     case 'endTournament': return { confirm: true, title: 'End the tournament and go back to the queue?',
       message: 'Games already played stay in Match History and Standings.', items: [it('End Tournament', 'endTournament', { danger: true })] };
+    case 'deletePlayer': { const r = registry().find(x => x.name === id); if (!r) return null; return { confirm: true, title: `Delete ${r.name}?`,
+      message: `They're removed from ${r.sessions === 1 ? 'the 1 session' : `all ${r.sessions} sessions`} they were in and from those standings. Games they played stay in Match History as “Removed player”. This can't be undone.`,
+      items: [it(`Delete ${r.name}`, 'delPlayer', { id, danger: true })] }; }
     case 'deleteSession': { const x = sessions.get(id); if (!x) return null; return { confirm: true, title: 'Delete this session and its results?',
       message: `${new Date(x.date).toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })} · ${plural(x.results.length, 'game')}. This can't be undone.`,
       items: [it('Delete Session', 'deleteSession', { id, danger: true })] }; }
@@ -1845,34 +1880,20 @@ const HOW = {
     '**Rest.** Players just off court sit out the next game when enough rested players are waiting.',
     '**Late arrivals.** 30+ minutes after the first game, the first 4 late arrivals go to the front of the line, at most 2 in one game.',
     "**Cancelled games** don't count for anyone, and the four go back to where they were in line."],
-  glance: [['Who shares a game', ['Similar ratings first, mixed if needed', 'Only your own group: 4.0+ or under 4.0', 'Whoever is due next, any ratings']],
-    ['Teams', ['Balanced', 'Balanced', 'Balanced']],
-    ['Can a court sit waiting?', ['No', 'Yes, for 4 from one group', 'No']]],
-  modes: [['Auto', ['Tries four players within **1.0** of each other, then **1.5**, then mixed **balanced** teams.',
-      'Rest and fair game counts come before a close skill match.', 'Good for most nights.']],
-    ['Equal Skill', ['Players split into two groups, **4.0 and up** and **under 4.0**, that never share a game.',
-      '**4.0+** play only each other, so their games are always within 1.0.',
-      '**Under 4.0** play **balanced** games among themselves, any ratings.',
-      "**Not enough players:** if either group has fewer than 4 here (sitting out doesn't count), everyone plays balanced games together until both groups have 4 again.",
-      'Singles stay within 1.0. Good for keeping strong players together.']],
-    ['Balanced Skill', ['Whoever is due next plays, mixed levels.', 'Teams are balanced: team averages within **0.75**.', 'Good for social nights and small groups.']]],
-  allModes: ["Teams aim for averages within **0.75**; if that's impossible, the fairest split.",
+  matching: ['Tries four players at the **same or neighbouring levels**, then up to **2 levels** apart.',
+    '**Never more than 2 levels apart:** if no such four are free, the court waits. Singles opponents are also within 2 levels.',
+    'Rest and fair game counts come before a close skill match.'],
+  allModes: ["Teams aim for averages within about one level; if that's impossible, the fairest split.",
     "The exact same teams don't face each other twice in a row.",
-    'Locked teammates stay together (in Equal Skill, only within their group). Choose Players and Scheduled Matches override the automatic picks.'],
-  ratings: ['Ratings run **1.0 to 5.0** and change after every game with a winner. Beating a stronger side moves them more.',
-    "A new player's first 8 games move **1.5×** as much, so they find their level quickly; regulars move **0.75×**.",
-    '**Reaching 4.0 takes 3 wins in a row.** Until then a win stops at 3.94 (shown as 3.9).',
-    "**4.0 floor:** once a player reaches 4.0, losing can't take them below 4.0 again. You can still set a lower rating by hand.",
-    'Deleting or correcting a game undoes its rating change exactly.',
+    'Locked teammates stay together, within the 2-level limit. Choose Players and Scheduled Matches override the automatic picks.'],
+  ratings: ['Seven levels: **Low beginner, High beginner, Low interm, High interm, Low adv, High adv, Pro**.',
+    "You set each player's level. Wins and losses never change it.",
     '🔥 3+ wins in a row and 🧊 3+ losses in a row are display only; they never change matching.',
     "**Standings** use the win rate with 2 extra wins and 2 extra losses, so a lucky night can't top the table. You need 75% of the night's typical games to be ranked."],
 };
 function howItWorks() {
   const md = t => esc(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>'), rows = items => items.map(t => `<div class="row-cell">${md(t)}</div>`).join('');
-  const glance = `<div class="row-cell" style="overflow-x:auto"><table class="how"><thead><tr><th></th>${HOW.modes.map(([n]) => `<th scope="col">${esc(n)}</th>`).join('')}</tr></thead>
-    <tbody>${HOW.glance.map(([h, cells]) => `<tr><th scope="row">${esc(h)}</th>${cells.map(c => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
-  return section('The queue', rows(HOW.queue)) + section('Matching modes at a glance', glance)
-    + HOW.modes.map(([n, items]) => section(n, rows(items))).join('') + section('Every mode', rows(HOW.allModes)) + section('Ratings and standings', rows(HOW.ratings));
+  return section('The queue', rows(HOW.queue)) + section('Matching', rows([...HOW.matching, ...HOW.allModes])) + section('Levels and standings', rows(HOW.ratings));
 }
 
 // ---------- sheets ----------
@@ -1909,7 +1930,7 @@ function renderModal() {
     const name = m.name.trim(), dup = isDupName(name);
     html = sheet('Add Player', `<form id="addPlayerForm" class="sec"><div class="group">
         <div class="row-cell"><input class="field" id="addName" placeholder="Player name" autocomplete="off" maxlength="40" aria-label="Player name" value="${esc(m.name)}"></div>
-        <label class="row-cell split" for="addSkill"><span>Skill</span><select id="addSkill">${SKILL.map((s, i) => `<option value="${i + 1}" ${m.skill === i + 1 ? 'selected' : ''}>${s}</option>`).join('')}</select></label>
+        <label class="row-cell split" for="addSkill"><span>Level</span><select id="addSkill">${SKILL.map((s, i) => `<option value="${i + 1}" ${m.skill === i + 1 ? 'selected' : ''}>${s}</option>`).join('')}</select></label>
       </div><p class="sec-f warnf" id="addDup" ${dup ? '' : 'hidden'}>${esc(name)} is already in this session.</p></form>
       ${m.added.length ? section('Added', `<div class="row-cell">${esc(m.added.join(', '))}</div>`) : ''}`,
       { left: { label: 'Done', act: 'close' }, right: { label: 'Add', act: 'addGo', id: 'addGo', disabled: !name || dup } });
@@ -1917,19 +1938,23 @@ function renderModal() {
     const p = m.everywhere ? null : P(m.id); if (!m.everywhere && !p) { ui.modal = null; el.innerHTML = ''; return; }
     html = sheet('Edit Player', `<div class="sec"><div class="group"><div class="row-cell"><input class="field title" id="editName" value="${esc(m.name)}" maxlength="40" aria-label="Name"></div></div>
         <p class="sec-f warnf" id="editDup" hidden></p></div>
-      <section class="sec"><h2 class="sec-h">Rating</h2><div class="group">
-        <div class="row-cell split"><span class="lvl"><span id="editDots">${dots(m.skill)}</span><span id="editLevel">${SKILL[level(m.skill) - 1]}</span></span><span class="bigval" id="editVal">${r1(m.skill)}</span></div>
-        <div class="row-cell slider"><span class="muted">1</span><input type="range" id="editSkill" min="1" max="5" step="0.1" value="${m.skill}" aria-label="Rating"><span class="muted">5</span></div>
-        <div class="row-cell"><div class="seg" role="group" aria-label="Set level">${[1, 2, 3, 4, 5].map(n => `<button data-act="editLevel" data-n="${n}" aria-pressed="${level(m.skill) === n}">${n}</button>`).join('')}</div></div>
-      </div><p class="sec-f">${m.everywhere ? `Changes their name and rating in every session they're in. ${m.played} played · ${m.won} won in all.`
-        : `Wins and losses keep adjusting this. ${played(p.id)} played · ${wins(p.id)} won this session.`}</p></section>
+      <section class="sec"><h2 class="sec-h">Level</h2><div class="group">
+        <label class="row-cell split" for="editLvl"><span class="lvl">${dots(m.skill)}</span><select id="editLvl" aria-label="Level">${SKILL.map((n, i) => `<option value="${i + 1}" ${level(m.skill) === i + 1 ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+      </div><p class="sec-f">${m.everywhere ? `Changes their name and level in every session they're in. ${m.played} played · ${m.won} won in all.`
+        : `Only you change this; results don't. ${played(p.id)} played · ${wins(p.id)} won this session.`}</p></section>
       ${m.everywhere ? '' : `<section class="sec"><h2 class="sec-h">Plays</h2><div class="group">
         <div class="row-cell"><div class="seg" role="group" aria-label="Plays">${PREFS.map(v => `<button data-act="editPref" data-v="${v}" aria-pressed="${m.pref === v}">${cap(v)}</button>`).join('')}</div></div>
         <label class="row-cell split" for="editPaused"><span>Sitting out</span><input class="check" type="checkbox" id="editPaused" ${m.paused ? 'checked' : ''}></label>
       </div><p class="sec-f">Sitting out keeps their place in line; their wait clock keeps running.</p></section>
       <section class="sec"><div class="group">
         <label class="row-cell split" for="editPresent"><span>Present</span><input class="check" type="checkbox" id="editPresent" ${m.present ? 'checked' : ''}></label>
-      </div><p class="sec-f">Off until they arrive. Turned on, they join the line like a late arrival, with their wait starting then.</p></section>`}`,
+      </div><p class="sec-f">Off until they arrive. Turned on, they join the line like a late arrival, with their wait starting then.</p></section>`}
+      ${m.everywhere && m.check ? `<section class="sec"><h2 class="sec-h">Level check</h2><div class="group">
+        <div class="row-cell"><span class="who"><b>${esc(levelCheckLabel(m.check))}</b><small class="num">Last ${m.check.games} games: ${m.check.wins}–${m.check.games - m.check.wins}. Expected about ${Math.round(m.check.expected)} wins. Won ${m.check.higherWins} of ${m.check.higherGames} against higher levels.</small></span></div>
+        <button class="row-cell btnrow accent" data-act="levelApply">${m.check.dir === 'up' ? 'Promote' : 'Move down'} to ${SKILL[m.check.to - 1]}</button>
+        <button class="row-cell btnrow" data-act="levelSnooze">Not yet</button>
+      </div><p class="sec-f">${m.check.dir === 'up' ? 'Won clearly more than their level predicts.' : 'Won clearly less than their level predicts.'} "Not yet" asks again after ${SNOOZE_GAMES} more games.</p></section>` : ''}
+      ${m.everywhere ? `<section class="sec"><div class="group"><button class="row-cell btnrow danger" data-act="askDelPlayer">${ic('trash')}Delete Player</button></div></section>` : ''}`,
       { right: { label: 'Save', act: 'saveEdit', id: 'saveEdit' } });
   } else if (m.type === 'scheduled') {
     if (m.adding) {
@@ -2054,7 +2079,7 @@ function renderModal() {
         <button aria-pressed="${!t}" data-act="mode" data-mode="queue">Queue</button>
         <button aria-pressed="${!!t}" data-act="mode" data-mode="tournament">Tournament</button></div></div>`,
         'Queue rotates everyone through fair games. Tournament runs a round robin, then a double-elimination bracket.')
-      + (!t ? section('Queue matching', `<div class="row-cell"><div class="seg" role="group" aria-label="Queue matching">${[['auto','Auto'],['equalSkill','Equal Skill'],['balancedSkill','Balanced Skill']].map(([v,label])=>`<button aria-pressed="${matchingMode()===v}" data-act="queueMatching" data-v="${v}">${label}</button>`).join('')}</div></div><button class="row-cell btnrow accent" data-act="open" data-modal="howItWorks">${ic('help')}Compare Matching Modes</button>`,matchingHelp()) : '')
+      + (!t ? section('Queue matching', `<button class="row-cell btnrow accent" data-act="open" data-modal="howItWorks">${ic('help')}How Matching Works</button>`,matchingHelp()) : '')
       + section('Courts', `<div class="row-cell split"><span>Courts</span><span class="muted num">${S.courts.length}</span></div>
         <button class="row-cell btnrow accent" data-act="addCourt">${ic('plusRect')}Add Court</button>`)
       + section('', `<button class="row-cell btnrow accent" data-act="open" data-modal="locks">${ic('lock')}Locked Teammates</button>`)
@@ -2093,7 +2118,7 @@ function renderModal() {
         if (out) return `On hold: ${out.name} ${out.away ? "isn't here" : 'is sitting out'}`;
       if (splitDue(a.id, b.id)) return '3 wins in a row together: not teammates until both play';
         const n = lockStreak(a.id, b.id); return n ? `${plural(n, 'win')} in a row together` : 'Playing together'; };
-      html = sheet('Locked Teammates', section('', (lockedPairs().map(([x, y]) => [P(x), P(y)]).map(([a, b]) => `<div class="row-cell split"><span class="who"><b>${esc(a.name)} &amp; ${esc(b.name)}</b><small>${esc(status(a, b))} · ${r1((a.skill + b.skill) / 2)} avg</small></span>
+      html = sheet('Locked Teammates', section('', (lockedPairs().map(([x, y]) => [P(x), P(y)]).map(([a, b]) => `<div class="row-cell split"><span class="who"><b>${esc(a.name)} &amp; ${esc(b.name)}</b><small>${esc(status(a, b))} · ${SKILL[level((a.skill + b.skill) / 2) - 1]} avg</small></span>
           <button class="iconbtn danger" data-act="unlock" data-id="${a.id}" aria-label="Unlock ${esc(a.name)} and ${esc(b.name)}" title="Unlock">${ic('trash')}</button></div>`).join('')
           || '<div class="row-cell muted">No locked teammates.</div>')
         + `<button class="row-cell btnrow accent" data-act="lockNew">${ic('plus')}Add Locked Pair</button>`,
@@ -2102,7 +2127,7 @@ function renderModal() {
     } else {
       const free = S.players.filter(p => p.pref !== 'singles' && !isLocked(p));
       const pickOne = (id, label, val, other) => `<label class="row-cell split" for="${id}"><span>${label}</span><select id="${id}"><option value="">Choose</option>${free.filter(p => p.id !== other).map(p =>
-        `<option value="${p.id}" ${p.id === val ? 'selected' : ''}>${esc(p.name)} · ${r1(p.skill)}</option>`).join('')}</select></label>`;
+        `<option value="${p.id}" ${p.id === val ? 'selected' : ''}>${esc(p.name)} · ${SKILL[level(p.skill) - 1]}</option>`).join('')}</select></label>`;
       html = sheet('Add Locked Pair', section('', pickOne('lockA', 'Player', m.a, m.b) + pickOne('lockB', 'Teammate', m.b, m.a),
         free.length < 2 ? 'Everyone who plays doubles is already locked.' : ''),
         { left: { label: 'Back', act: 'lockBack' }, right: { label: 'Add', act: 'lockAdd', disabled: !(m.a && m.b) } });
@@ -2130,7 +2155,7 @@ function returningList() {
   if (!all.length) return section('', `<div class="row-cell muted">${past().length ? 'Everyone from earlier sessions is already in this one.' : 'No earlier sessions yet. Players you add today will show up here next time.'}</div>`);
   const shown = m.search ? all.filter(p => p.name.toLowerCase().includes(m.search.toLowerCase())) : all;
   return section('', shown.map(p => { const on = m.picked.includes(p.name);
-    return `<button class="row-cell btnrow pickrow" data-act="retPick" data-name="${esc(p.name)}" aria-pressed="${on}">${ic(on ? 'checkFill' : 'circle', on ? 'on' : 'off')}<b class="strong">${esc(p.name)}</b><span class="sp"></span>${dots(p.skill)}<small class="num">${r1(p.skill)}</small></button>`;
+    return `<button class="row-cell btnrow pickrow" data-act="retPick" data-name="${esc(p.name)}" aria-pressed="${on}">${ic(on ? 'checkFill' : 'circle', on ? 'on' : 'off')}<b class="strong">${esc(p.name)}</b><span class="sp"></span>${dots(p.skill)}<small class="lvlname">${SKILL[level(p.skill) - 1]}</small></button>`;
   }).join('') || '<div class="row-cell muted">No matches.</div>');
 }
 function newSessionList() {
@@ -2138,7 +2163,7 @@ function newSessionList() {
   if (!all.length) return section('', '<div class="row-cell muted">No players yet. Add them inside the session.</div>');
   const shown = m.search ? all.filter(p => p.name.toLowerCase().includes(m.search.toLowerCase())) : all;
   return section('', shown.map(p => { const on = m.picked.includes(p.name);
-    return `<button class="row-cell btnrow pickrow" data-act="nsPick" data-name="${esc(p.name)}" aria-pressed="${on}">${ic(on ? 'checkFill' : 'circle', on ? 'on' : 'off')}<b class="strong">${esc(p.name)}</b><span class="sp"></span>${dots(p.skill)}<small class="num">${r1(p.skill)}</small></button>`;
+    return `<button class="row-cell btnrow pickrow" data-act="nsPick" data-name="${esc(p.name)}" aria-pressed="${on}">${ic(on ? 'checkFill' : 'circle', on ? 'on' : 'off')}<b class="strong">${esc(p.name)}</b><span class="sp"></span>${dots(p.skill)}<small class="lvlname">${SKILL[level(p.skill) - 1]}</small></button>`;
   }).join('') || '<div class="row-cell muted">No matches.</div>');
 }
 function syncNewSession() {
@@ -2170,7 +2195,7 @@ function allPlayersList() {
   const m = ui.modal, all = registry();
   if (!all.length) return section('', '<div class="row-cell muted">No players yet.</div>');
   const shown = m.search ? all.filter(r => r.name.toLowerCase().includes(m.search.toLowerCase())) : all;
-  return section('', shown.map(r => `<button class="row-cell split btnrow" data-act="regEdit" data-name="${esc(r.name)}" aria-label="Edit ${esc(r.name)}"><span class="who"><b>${esc(r.name)}</b><small class="num">${plural(r.sessions, 'session')} · ${r.played} played · ${r.won} won · last ${new Date(r.last).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</small></span>${rating(r)}</button>`).join('')
+  return section('', shown.map(r => `<button class="row-cell split btnrow" data-act="regEdit" data-name="${esc(r.name)}" aria-label="Edit ${esc(r.name)}"><span class="who"><b>${esc(r.name)}</b><small class="num">${plural(r.sessions, 'session')} · ${r.played} played · ${r.won} won · last ${new Date(r.last).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</small></span>${r.check ? `<span class="lvcheck ${r.check.dir}">${esc(levelCheckLabel(r.check))}</span>` : ''}${rating(r)}</button>`).join('')
     || '<div class="row-cell muted">No matches.</div>');
 }
 
@@ -2207,7 +2232,7 @@ document.addEventListener('click', e => {
     case 'open': {
       const type = b.dataset.modal;
       if (type === 'returning') return openModal({ type, picked: [], search: '' });
-      if (type === 'addPlayer') return openModal({ type, name: '', skill: 3, added: [] });
+      if (type === 'addPlayer') return openModal({ type, name: '', skill: 4, added: [] }); // High interm
       if (type === 'allPlayers') return openModal({ type, search: '' });
       if (type === 'sessionPlayers') return openModal({ type, search: '' });
       if (type === 'newSession') { const last = [...sessions.values()].sort((a, b) => b.date - a.date)[0];
@@ -2258,7 +2283,6 @@ document.addEventListener('click', e => {
     case 'rm': S.players = S.players.filter(p => p.id !== id); break;
     case 'edit': { const p = P(id); return openModal({ type: 'edit', id, skill: p.skill, name: p.name, pref: p.pref, paused: !!p.paused, present: !p.away }); }
     case 'editPref': m.pref = b.dataset.v; return renderModal();
-    case 'editLevel': m.skill = PRESETS[b.dataset.n - 1]; return syncEdit();
     case 'saveEdit': return saveEdit();
     case 'addGo': return addFromSheet();
     case 'win': finish(id, b.dataset.w === 'none' ? null : +b.dataset.w); break;
@@ -2297,8 +2321,14 @@ document.addEventListener('click', e => {
       sessions.set(x.id, x); writeSession(x); home = false; ui.modal = null; renderModal(); return switchTo(x.id);
     }
     case 'regEdit': { const r = registry().find(x => x.name === b.dataset.name); if (!r) return;
-      openModal({ type: 'edit', everywhere: r.name, name: r.name, skill: r.skill, played: r.played, won: r.won }); ui.modal.back = m; return; }
+      openModal({ type: 'edit', everywhere: r.name, name: r.name, skill: r.skill, played: r.played, won: r.won, check: r.check }); ui.modal.back = m; return; }
     case 'askDelete': return openMenu('deleteSession', id, b.getBoundingClientRect());
+    case 'askDelPlayer': return openMenu('deletePlayer', ui.modal.everywhere, b.getBoundingClientRect());
+    case 'levelApply': { editEverywhere(m.everywhere, m.everywhere, PRESETS[m.check.to - 1]).forEach(writeSession); render(); return closeModal(); }
+    case 'levelSnooze': { snoozeEverywhere(m.everywhere).forEach(writeSession); render(); return closeModal(); }
+    case 'delPlayer': { const changed = deleteEverywhere(id);
+      if (!changed) { alert(`${id} is on a court. Finish or undo their game first, then delete them.`); return; }
+      changed.forEach(writeSession); render(); return closeModal(); }
     case 'deleteSession': {
       if (id === S.id) {
         home = true; ui.modal = null;
@@ -2364,7 +2394,7 @@ document.addEventListener('input', e => {
   if (e.target.id === 'editPresent') m.present = e.target.checked;
   if (e.target.id === 'spSearch') { m.search = v; document.getElementById('spList').innerHTML = sessionPlayersList(); }
   if (e.target.id === 'allSearch') { m.search = v; document.getElementById('allList').innerHTML = allPlayersList(); }
-  if (e.target.id === 'editSkill') { m.skill = +v; syncEdit(); }
+  if (e.target.id === 'editLvl') { m.skill = PRESETS[+v - 1]; renderModal(); }
   if (e.target.id === 'editName') { m.name = v; syncEdit(); }
   if (e.target.id === 'addName') { m.name = v; syncAdd(); }
   if (e.target.id === 'sessName') { S.name = v.trim() || null; writeSession(S); }
@@ -2384,11 +2414,6 @@ document.addEventListener('submit', e => { if (e.target.id === 'addPlayerForm') 
 
 function syncEdit() {
   const m = ui.modal;
-  document.getElementById('editDots').innerHTML = dots(m.skill);
-  document.getElementById('editLevel').textContent = SKILL[level(m.skill) - 1];
-  document.getElementById('editVal').textContent = r1(m.skill);
-  document.getElementById('editSkill').value = m.skill;
-  document.querySelectorAll('[data-act=editLevel]').forEach(x => x.setAttribute('aria-pressed', +x.dataset.n === level(m.skill)));
   const name = (m.name ?? '').trim(), dup = m.everywhere ? isDupEverywhere(name, m.everywhere) : isDupName(name, m.id);
   const warn = document.getElementById('editDup');
   warn.hidden = !dup; warn.textContent = `Another player${m.everywhere ? '' : ' in this session'} is already called ${name}.`;
@@ -2427,6 +2452,7 @@ function saveEdit() {
   }
   if (!p || !name || isDupName(name, m.id)) return;
   const old = p.name.toLowerCase();
+  if (level(p.skill) !== level(m.skill)) { p.levelSet = Date.now(); delete p.levelSnooze; } // earlier results don't count towards a level check
   p.name = name; p.skill = Math.round(m.skill * 10) / 10;
   if (m.pref) p.pref = m.pref;
   if (m.paused != null) p.paused = m.paused;
@@ -2461,12 +2487,12 @@ function queueMatchingSelfCheck() {
     console.assert(!splitTiers()&&balancedOnly()&&!!pick('doubles',S.players),'no 4.0 group: everyone plays balanced games');
     setQueueMatching('balancedSkill');
     console.assert(!!pick('doubles',S.players),'balanced permits mixed ratings');
-    // Two groups: 4.0+ only with each other; under 4.0 balanced among themselves (1.0 and 3.9 may share a game).
-    S=fixture([4,4.2,4.5,5,1,2,3,3.9]);setQueueMatching('equalSkill');
+    // Two groups: 4.0+ only with each other; under 4.0 balanced among themselves (1.0 and 3.4 may share a game).
+    S=fixture([4,4.2,4.5,5,1,2,3,3.4]);setQueueMatching('equalSkill');
     console.assert(splitTiers()&&!balancedOnly());
     for(let k=0;k<8;k++){const g=ids(pick('doubles',S.players,k));console.assert(new Set(g.map(id=>+id.slice(1)<4)).size===1&&skillRangeAllowed(g),'groups never mix');}
     console.assert(ids(pick('doubles',S.players.slice(4))).sort().join()==='m4,m5,m6,m7','under 4.0: wide ratings, balanced teams');
-    console.assert(!skillRangeAllowed(['m0','m1','m2','m7']),'3.9 cannot join the 4.0 group');
+    console.assert(!skillRangeAllowed(['m0','m1','m2','m7']),'3.4 cannot join the 4.0 group');
     S.players[3].paused=true;
     console.assert(!splitTiers()&&!!pick('doubles',[S.players[0],S.players[1],S.players[2],S.players[7]]),'3 left in a group: groups join');
     S=fixture([3,4,4.2,4.4,4.6,2,2.5,2.8]);setQueueMatching('equalSkill');
@@ -2500,7 +2526,7 @@ function queueMatchingSelfCheck() {
     for(let k=0;k<3;k++)S.results.push({a:['m2','m3'],b:['m0','m1'],winner:0,court:'C1',start:Date.now()-600000,end:Date.now()-60000});
     S.players[3].skill=4;
     console.assert(!skillRangeAllowed(['m0','m1','m2','m3'])&&!pick('doubles',S.players.slice(0,4)),'saved ratings decide the group');
-    S=fixture([4,4,3.9,3.9,2,2,2,2,4,4]);setQueueMatching('equalSkill');S.players[0].lock='m1';S.players[1].lock='m0';
+    S=fixture([4,4,3.4,3.4,2,2,2,2,4,4]);setQueueMatching('equalSkill');S.players[0].lock='m1';S.players[1].lock='m0';
     console.assert(!pick('doubles',S.players.slice(0,4)),'locked search cannot mix groups');
     S=fixture([2,2,3,3]);setQueueMatching('equalSkill');
     lockSide(S.courts[0].id,0);
@@ -2553,7 +2579,7 @@ function queueMatchingSelfCheck() {
   const lastGame = (a, b) => { const r = {}; for (const [mine, theirs] of [[a, b], [b, a]]) for (const i of mine)
     r[eight[i].id] = { partners: new Set(mine.filter(x => x !== i).map(x => eight[x].id)), opponents: new Set(theirs.map(x => eight[x].id)) }; return r; };
   const again = pickDoubles(eight, 0, { recent: lastGame([0, 3], [1, 2]) });
-  console.assert([...again.a,...again.b].every(p=>eight.slice(0,4).includes(p)), 'repeats do not change who gets the turn');
+  console.assert([...again.a,...again.b].map(p=>p.name).sort().join()==='0,1,2,3' && repeats(again.a,again.b,lastGame([0, 3], [1, 2]))===0, 'the same four can play again, shuffled into new partnerships');
   const firstTry = pickDoubles(eight);
   // Too few players for similar groups (under 6.25 per doubles court): balanced teams in queue order instead.
   const lineup = extra => ({ players: [5.0, 2.6, 4.6, 3.0, 5.0, 4.8, 4.9, 2.8, ...Array(extra).fill(3)].map((sk, i) => ({ ...pl(sk, i), name: String(i), readyAt: Date.now() - 60000 + i })),
@@ -2590,8 +2616,9 @@ function queueMatchingSelfCheck() {
   S.results = [res(s0, s1), res(s0, s1), res(s0, s1)];
   S.results.push(res(s0, s1, null));
   console.assert(streak(s0) === 3, "a cancelled game doesn't break a streak");
-  console.assert(PRESETS.every((x, i) => level(x) === i + 1), 'each level preset reads as its own level');
-  // Standings: ranked from 75% of the median games played; a corrected winner moves ratings as if it had been entered right.
+  // Levels: seven fixed points, nearest level for old decimal ratings; matching reads the level.
+  console.assert(PRESETS.every((x, i) => level(x) === i + 1) && level(4.68) === 6 && level(3.82) === 5 && level(5.8) === 7 && level(5) === 6 && level(5.12) === 6 && level(0.5) === 1, 'nearest level');
+  // Standings: ranked from 75% of the median games played; correcting a winner leaves levels alone.
   {
     const keepS = S;
     S = { players: [0, 1, 2, 3, 4, 5].map(i => pl(3, i)), courts: [], results: [], tournament: null };
@@ -2600,13 +2627,14 @@ function queueMatchingSelfCheck() {
     const fresh = () => ({ players: [0, 1, 2, 3].map(i => pl(3, i)), courts: [court('C', 'doubles')], results: [], tournament: null });
     S = fresh(); const ids = S.players.map(p => p.id), t0 = Date.now() - 600000;
     S.courts[0].match = { a: ids.slice(0, 2), b: ids.slice(2), start: t0 }; finish(S.courts[0].id, 1);
-    const right = S.players.map(p => p.skill).join(), end = S.results[0].end;
+    console.assert(S.players.every(p => p.skill === 3) && S.results[0].changes == null, "a win doesn't change a level");
+    const end = S.results[0].end;
     S = fresh(); S.players.forEach((p, k) => p.id = ids[k]);
-    S.results = [{ a: ids.slice(0, 2), b: ids.slice(2), winner: 0, start: t0, end, changes: Object.fromEntries(ids.map(x => [x, 0])) }];
+    S.results = [{ a: ids.slice(0, 2), b: ids.slice(2), winner: 0, start: t0, end, changes: Object.fromEntries(ids.map(x => [x, 0.3])) }];
     setWinner(0, 1);
-    console.assert(S.players.map(p => p.skill).join() === right, 'a corrected winner moves ratings as if entered right');
-    setWinner(0, null);
-    console.assert(S.players.every(p => p.skill === 3) && !counted().length, 'corrected to cancelled: no rating change, not a game');
+    console.assert(S.results[0].winner === 1 && S.players.every(p => p.skill === 3), "results never change levels, and old stored changes aren't reversed");
+    deleteResult(0);
+    console.assert(S.players.every(p => p.skill === 3) && !S.results.length, 'deleting a game leaves levels alone');
     S = keepS;
   }
   console.assert(!streakEmoji(2)&&!streakEmoji(-2)&&streakEmoji(3)==='🔥'&&streakEmoji(-3)==='🧊','streak emojis start at three');
@@ -2643,17 +2671,41 @@ function queueMatchingSelfCheck() {
     sessions = new Map([['a', a], ['b', b]]); currentId = 'b';
     console.assert(markEndedOnce().length === 1 && a.ended === 5 && b.ended == null, 'old saves: earlier sessions ended, the open one live');
     console.assert(editEverywhere('ANA', 'Anna', 4.2).length === 2 && [a, b].every(x => x.players[0].name === 'Anna' && x.players[0].skill === 4.2), 'an All Players edit applies everywhere');
+    console.assert([a, b].every(x => x.players[0].levelSet > 0) && (a.players[0].levelSet = 7, editEverywhere('Anna', 'Anna', 4.2), a.players[0].levelSet === 7), 'a level change starts the level check fresh; the same level does not');
+  { // Level checks: wins against what the levels predict, over 15+ games in 2+ sessions since the level was set.
+    const night = (id, date, record, me = 2.6, extra = {}) => ({ id, date, players: [{ id: id + 'me', name: 'Lev', skill: me, ...extra },
+        { id: id + 'pa', name: 'Pa', skill: me }, { id: id + 'o1', name: 'Hi', skill: Math.min(5, me + 0.8) }, { id: id + 'o2', name: 'Lo', skill: Math.max(1, me - 0.8) }],
+      results: record.split('').map((c, i) => ({ a: [id + 'me', id + 'pa'], b: [id + 'o1', id + 'o2'], winner: c === 'W' ? 0 : 1, start: date + i, end: date + i + 1 })) });
+    const two = (r1, r2, me, extra) => [night('n1', 1000, r1, me), night('n2', 2000, r2, me, extra)];
+    const up = levelCheck('lev', two('WWWWWWWWWWWWWLLL', 'WWWWWWWWWWWWWLLL'));
+    console.assert(up?.dir === 'up' && up.to === 4 && up.wins === 26 && Math.round(up.expected) === 16, '26–6 in even games: ready to move up');
+    console.assert(levelCheck('Lev', two('WWWWWWWWWLLLLLLL', 'WWWWWWWWWLLLLLLL')) === null, '18–14 fits the level');
+    console.assert(levelCheck('Lev', two('WWWLLLLLLLLLLLLL', 'WWWLLLLLLLLLLLLL'))?.dir === 'down', '6–26 in even games: check level');
+    console.assert(levelCheck('Lev', [night('n1', 1000, 'WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWL')]) === null, 'one session is not enough');
+    console.assert(levelCheck('Lev', two('WWWWWWWWWWWWWLLL', 'WWWWWWWWWWWWWLLL', 2.6, { levelSet: 5000 })) === null, 'games before the level was set do not count');
+    console.assert(levelCheck('Lev', two('WWWWWWWWWWWWWLLL', 'WWWWWWWWWWWWWLLL', 2.6, { levelSnooze: 5000 })) === null, 'Not yet hides the check');
+    const later = [...two('WWWWWWWWWWWWWLLL', 'WWWWWWWWWWWWWLLL', 2.6, { levelSnooze: 2010 }), night('n3', 3000, 'WWWWWWWWWW')];
+    console.assert(levelCheck('Lev', later)?.dir === 'up', 'Not yet asks again after 10 more games');
+    console.assert(levelCheck('Lev', two('WWWWWWWWWWWWWLLL', 'WWWWWWWWWWWWWLLL', 5.8)) === null && levelCheck('Lev', two('WWWLLLLLLLLLLLLL', 'WWWLLLLLLLLLLLLL', 1)) === null, 'no level above Pro or below Low beginner');
+  }
     a.results = [{ start: 1000 }]; a.hours = 2.5;
     console.assert(endsAt(a) === 1000 + 9000000 && endsAt(b) == null, 'ends 2.5 h after the first game');
+    // All Players delete: gone from every roster (games stay), locks cleared; not while on a court in a live session.
+    b.players.push({ id: 'bo', name: 'Bo', skill: 3, lock: 'an' }); b.players[0].id = 'an'; b.players[0].lock = 'bo';
+    b.results = [{ a: ['an'], b: ['bo'], winner: 0 }]; b.courts = [{ id: 'c', match: { a: ['an'], b: ['bo'] } }];
+    console.assert(deleteEverywhere('anna') === null && a.players.length === 1, "can't delete someone on court");
+    b.courts[0].match = null;
+    console.assert(deleteEverywhere('anna').length === 2 && !a.players.length && b.players.map(p => p.name).join() === 'Bo' && b.players[0].lock == null && b.results.length === 1,
+      'an All Players delete applies everywhere and keeps games');
     [sessions, currentId] = keep;
   }
   // The first player added to an empty session dates it today.
   S = { date: 0, players: [], courts: [], results: [], tournament: null };
   addPlayer('A', 3);
   console.assert(new Date(S.date).toDateString() === new Date().toDateString(), 'an empty session takes the date its first player is added');
-  S={players:[{...pl(2.6,0),name:'Streak'},{...pl(4,1),name:'Four'}],courts:[],results:[],tournament:null};
+  S={players:[{...pl(2.6,0),name:'Streak'},{...pl(4.2,1),name:'Four'}],courts:[],results:[],tournament:null};
   for(let k=0;k<5;k++)S.results.push({a:[S.players[0].id],b:['x'],winner:0});
-  console.assert(Math.abs(unevenness([S.players[0].id],[S.players[1].id])-1.4)<1e-9&&!isEven([S.players[0].id],[S.players[1].id]),'evenness uses saved ratings');
+  console.assert(Math.abs(unevenness([S.players[0].id],[S.players[1].id])-1.6)<1e-9&&!isEven([S.players[0].id],[S.players[1].id]),'evenness uses levels');
   // Late arrivals: the first few go first, the rest join at par in arrival order; at most 2 on their first game in a game.
   S = { players: Array.from({ length: 12 }, (_, i) => ({ ...pl(3, i), name: 'R' + i, readyAt: Date.now() - 60000 + i })), courts: [court('C1', 'doubles'), court('C2', 'doubles')], results: [], tournament: null };
   for (const p of S.players) S.results.push({ a: [p.id], b: ['x'], winner: 0, start: Date.now() - 3600000 });
@@ -2662,21 +2714,10 @@ function queueMatchingSelfCheck() {
   console.assert(['L0', 'L1', 'L2', 'L3'].every(n => lineNames.indexOf(n) < 4) && lineNames.indexOf('L4') > lineNames.indexOf('R0'), 'late arrivals: 4 go first, then at par');
   const lateGame = pick('doubles', queue());
   console.assert([...lateGame.a, ...lateGame.b].filter(p => p.name.startsWith('L')).length <= LATE_PER_GAME, 'at most 2 late arrivals on their first game in one game');
-  // Ratings settle faster for a new player's first games, slower for regulars.
-  console.assert(kFactor({ id: 'n', rated: 0 }) === NEW_K && kFactor({ id: 'n', rated: NEW_GAMES }) === REG_K && kFactor({ id: 'n', rated: null }) === REG_K, 'rating speed by experience');
-  // Reaching 4.0 sets a floor: losses can't take that player below 4.0 again; under 4.0 they drop as usual.
-  S = { players: [4, 4.3, 3.9].map((sk, i) => pl(sk, i)), courts: [], results: [], tournament: null };
-  const flc = adjust(S.players.map(p => p.id), -1, null);
-  console.assert(S.players[0].skill === 4 && S.players[1].skill === 4 && Math.abs(S.players[2].skill - 3.15) < 1e-9 && Math.abs(flc[S.players[1].id] + 0.3) < 1e-9, '4.0 rating floor');
-  // Crossing into 4.0 takes 3 wins in a row; until then a win stops at 3.94 (a higher legacy rating just holds).
-  S = { players: [3.9, 3.97].map((sk, i) => pl(sk, i)), courts: [], results: [], tournament: null };
-  const [gg, gh] = S.players.map(p => p.id);
-  for (const w of [1, 0, 0]) S.results.push({ a: [gg, gh], b: ['x', 'y'], winner: w, start: Date.now() });
-  const held = adjust([gg, gh], 0.3, 2);
-  console.assert(Math.abs(P(gg).skill - GATE_CAP) < 1e-9 && Math.abs(held[gg] - 0.04) < 1e-9 && P(gh).skill === 3.97 && held[gh] === 0, 'no 4.0 on 2 wins in a row');
-  S.results[0].winner = 0; adjust([gg], 0.3, 2);
-  console.assert(Math.abs(P(gg).skill - (GATE_CAP + K * REG_K)) < 1e-9, 'the 3rd win in a row crosses 4.0');
-  console.assert(adjust([gg], 0.3, 1)[gg] > 0, 'wins above 4.0 need no streak');
+  // Auto never builds a game more than 2 levels wide: High beginner (1.8) never plays with Low adv (4.2) or High adv.
+  S = { players: [1.8, 1.8, 1.8, 4.2, 4.2, 5, 5].map((sk, i) => ({ ...pl(sk, i), readyAt: Date.now() - 60000 + i })), courts: [court('C1', 'doubles')], results: [], tournament: null };
+  const gapGame = pick('doubles', queue()), gs = gapGame ? [...gapGame.a, ...gapGame.b].map(p => p.skill) : [9, 0];
+  console.assert(Math.max(...gs) - Math.min(...gs) <= MAX_SPREAD && !pick('doubles', queue().slice(0, 4)), 'Auto caps a game at 2 levels');
   // The court names someone overdue only after 25 minutes.
   S = { players: [0, 1, 2, 3, 4, 5, 6, 7].map(i => ({ ...pl(3, i), name: 'W' + i, readyAt: Date.now() - 60000 + i })), courts: [], results: [], tournament: null };
   S.players[7].since = Date.now() - 22 * 60000; S.results.push({ winner: 0, a: [S.players[7].id], b: ['x'], start: Date.now() - 3600000 });
@@ -2702,7 +2743,7 @@ function queueMatchingSelfCheck() {
   console.assert(ids4(drawnP)===ids4(afterDrift) && [...S.courts[0].match.a,...S.courts[0].match.b].sort().join()===ids4(drawnP), 'clock changes do not alter preview or Start');
   // Even games: the four on 0 games play (a 5.0, 4.0 and two 3.0s, balanced) rather than the 4.8 on 1 game who'd make a closer
   // range, which would leave a 0-game player waiting while someone reaches 2.
-  S = { players: [5.0, 4.0, 3.0, 3.0, 5.0, 4.9, 4.8].map((sk, i) => ({ ...pl(sk, i), name: String(i), readyAt: Date.now() - 60000 + i })),
+  S = { players: [5.0, 4.0, 3.6, 3.6, 5.0, 4.9, 4.8].map((sk, i) => ({ ...pl(sk, i), name: String(i), readyAt: Date.now() - 60000 + i })),
     courts: [court('C1', 'doubles')], results: [], tournament: null };
   for (const p of S.players.slice(4)) S.results.push({a:[p.id],b:['x'],winner:0,start:Date.now()-600000});
   S.results.push({ a: ['x'], b: ['y'], winner: 0, start: Date.now() - 600000 });
@@ -2722,6 +2763,12 @@ function queueMatchingSelfCheck() {
   for (let i = 0; i < 4; i++) topRecent[top[i].id] = { partners: new Set([top[i ^ 1].id]), opponents: new Set([0, 1, 2, 3].filter(x => (x >> 1) !== (i >> 1)).map(x => top[x].id)) };
   const mixedUp = pickDoubles(top, 0, { recent: topRecent });
   console.assert([...mixedUp.a,...mixedUp.b].every(p=>top.slice(0,4).includes(p)), 'repeated foursomes keep their turns');
+  // The only similar group can't be shuffled without a recent partnership (0 partnered 2 and 3 lately): a balanced group
+  // up to 2 levels apart plays instead.
+  const reps = [3.4, 3.4, 2.6, 2.6, 1.8].map(pl), np = () => new Set();
+  const repsRecent = { [reps[0].id]: { partners: new Set([reps[2].id, reps[3].id]), opponents: np() }, [reps[2].id]: { partners: new Set([reps[0].id]), opponents: np() }, [reps[3].id]: { partners: new Set([reps[0].id]), opponents: np() } };
+  const freshGame = pickDoubles(reps, 0, { recent: repsRecent });
+  console.assert([...freshGame.a, ...freshGame.b].some(p => p.skill < 2) && Math.abs(sum(freshGame.a) - sum(freshGame.b)) / 2 <= FAIR && repeats(freshGame.a, freshGame.b, repsRecent) === 0, 'repeated partnerships: balanced wider group');
   const resting = [5, 4.2, 3.8, 3.0, 5, 5, 4.8].map(pl);
   const restGame = pickDoubles(resting, 0, { justOff: new Set(resting.slice(4).map(p => p.id)) });
   console.assert([...restGame.a, ...restGame.b].map(p => p.name).sort().join() === '0,1,2,3' && restGame.note === 'mixed teams so nobody goes straight back', 'rest first');
@@ -2832,7 +2879,7 @@ function queueMatchingSelfCheck() {
   S.courts[0].match = { a: [id(1), id(5)], b: [id(6), id(7)], start: Date.now() };
   console.assert(!pick('doubles', eligible('doubles')).a.concat(pick('doubles', eligible('doubles')).b).some(p => p.id === id(0)), 'a locked player waits while their teammate is on court');
   // Two far-apart locked pairs both overdue: one of them plays (with two others), not the two pairs against each other.
-  S = { players: [4.2, 2.1, 4.5, 4.3, 1.6, 1.4, 3.7, 3.3, 2.2, 1.1, 2.3, 1.7].map((sk, i) => ({ ...fresh(i), skill: sk })), courts: [court('C1', 'doubles')], results: [], tournament: null };
+  S = { players: [3.4, 1.8, 4.2, 4.2, 1.8, 2.6, 4.2, 4.2, 2.6, 1.0, 2.6, 1.8].map((sk, i) => ({ ...fresh(i), skill: sk })), courts: [court('C1', 'doubles')], results: [], tournament: null };
   setLock(id(0), id(1)); setLock(id(2), id(3));
   for (let i = 0; i < 4; i++) { S.players[i].since = Date.now() - 30 * 60000; }
   S.results.push({ winner: 0, a: [id(8), id(9)], b: [id(10), id(11)], start: Date.now() - 3600000 });
@@ -2881,7 +2928,7 @@ setInterval(()=>{if(!S)return;const before=JSON.stringify([S.scheduled,S.schedul
 // ---------- boot: shared live store when available, this browser otherwise ----------
 function bootLocal() {
   let live = true;
-  try { const d = JSON.parse(localStorage.getItem(LS_KEY)); if (d?.sessions?.length) { sessions = new Map(d.sessions.map(x => [x.id, x])); currentId = d.currentId; live = !!d.live; } } catch {}
+  try { const d = JSON.parse(localStorage.getItem(LS_KEY)); if (d?.sessions?.length) { for (const x of d.sessions) { if (!x.ended) delete x.queueMatching; for (const p of x.players || []) p.skill = PRESETS[level(p.skill) - 1]; } /* ponytail: Equal/Balanced hidden for now */ sessions = new Map(d.sessions.map(x => [x.id, x])); currentId = d.currentId; live = !!d.live; } } catch {}
   if (!live && markEndedOnce().length) saveLocal();
   if (!sessions.has(currentId)) { const x = sessions.size ? [...sessions.values()].sort((a, b) => b.date - a.date)[0] : blankSession(); sessions.set(x.id, x); currentId = x.id; saveLocal(); }
   for (const x of sessions.values()) normalizeEnd(x);

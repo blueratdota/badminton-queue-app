@@ -44,17 +44,12 @@ try {
   assert.throws(() => page.scheduleMatch('doubles', ['preview-4', 'preview-5'], ['preview-6', 'preview-7']), /Session Settings/);
   assert.equal(session.hours, null, 'missing lengths are not silently replaced');
   page.ui.modal = { type: 'settings' };
-  for (const mode of ['auto', 'equalSkill', 'balancedSkill']) {
-    page.setQueueMatching(mode);
-    page.renderModal();
-    const sheet = nodes.get('modal').innerHTML;
-    assert(sheet.includes('aria-label="Queue matching"'));
-    assert(sheet.includes(`aria-pressed="true" data-act="queueMatching" data-v="${mode}"`));
-    assert(sheet.includes(page.matchingHelp()));
-  }
+  page.renderModal();
+  assert(!nodes.get('modal').innerHTML.includes('data-act="queueMatching"'), 'Equal/Balanced selector hidden for now');
+  assert(nodes.get('modal').innerHTML.includes(page.matchingHelp()));
   session.tournament = {};
   page.renderModal();
-  assert(!nodes.get('modal').innerHTML.includes('aria-label="Queue matching"'), 'selector only appears in queue mode');
+  assert(!nodes.get('modal').innerHTML.includes('How Matching Works'), 'matching help only appears in queue mode');
   session.tournament = null;
   document.getElementById = getElement;
 } catch (e) { fails++; console.log('ERROR:', e.stack); }
